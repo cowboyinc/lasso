@@ -1,10 +1,13 @@
 export interface SessionState {
-  privateKey: string | null;
   validatorUrl: string;
+  walletAddress: string | null;
+  actors: string[];
 }
 
 export interface LassoConfig {
   validatorUrl: string;
+  walletAddress?: string;
+  actors?: string[];
 }
 
 export interface ConsoleMessage {
@@ -17,5 +20,4 @@ export type CommandResult =
   | { type: "error"; text: string }
   | { type: "quit" }
   | { type: "clear" }
-  | { type: "init" }
   | { type: "execute"; command: string; args: string[] };

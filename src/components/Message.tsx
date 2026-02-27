@@ -10,28 +10,28 @@ export function Message({ message }: MessageProps) {
   switch (message.role) {
     case "command":
       return (
-        <Box paddingX={1}>
-          <Text color="gray">{"\u276F "}{message.content}</Text>
+        <Box paddingX={1} marginBottom={1}>
+          <Text color="gray" backgroundColor="#1a1a1a">{" \u276F "}{message.content}{" "}</Text>
         </Box>
       );
 
     case "output":
       return (
-        <Box paddingX={1}>
+        <Box paddingX={1} marginBottom={1}>
           <Text>{message.content}</Text>
         </Box>
       );
 
     case "error":
       return (
-        <Box paddingX={1}>
+        <Box paddingX={1} marginBottom={1}>
           <Text color="red">{message.content}</Text>
         </Box>
       );
 
     case "system":
       return (
-        <Box paddingX={1}>
+        <Box paddingX={1} marginBottom={1}>
           <Text color="yellow">{message.content}</Text>
         </Box>
       );
