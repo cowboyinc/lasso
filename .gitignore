@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# cowboy CLI init output
+.cowboy/
+actors/
+cowboy.toml
