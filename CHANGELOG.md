@@ -12,7 +12,8 @@
 - `bootstrap.sh` installer script for downloading pre-built binaries
   - Detects OS and architecture automatically
   - Fetches latest version from CDN
-  - Installs to `/usr/local/bin/lasso` with sudo fallback
+  - Installs to `/usr/local/bin/lasso` with sudo password prompt
+  - Falls back to `~/.local/bin` when no terminal is available
   - Usage: `LASSO_KEY=xxx ./bootstrap.sh`
 - `react-devtools-core` dev dependency (required for Bun compilation of Ink)
 - `bun.lock` lockfile for Bun package manager
