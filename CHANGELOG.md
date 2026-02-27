@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- Bun binary distribution pipeline (`.github/workflows/pipeline.yml`)
+  - Typecheck job on all pushes to main
+  - Cross-compile 4 platform binaries (darwin-arm64, darwin-x64, linux-x64, linux-arm64)
+  - Upload to S3 with versioned paths and `latest` pointer
+  - Two-step AWS OIDC auth (org role -> dev account role)
+  - Slack notifications on build success/failure
+- `bootstrap.sh` installer script for downloading pre-built binaries
+  - Detects OS and architecture automatically
+  - Fetches latest version from CDN
+  - Installs to `/usr/local/bin/lasso` with sudo fallback
+  - Usage: `LASSO_KEY=xxx ./bootstrap.sh`
+- `react-devtools-core` dev dependency (required for Bun compilation of Ink)
+- `bun.lock` lockfile for Bun package manager
+- `build/` added to `.gitignore`
+
+### Added
 - Actor commands: `execute`, `get`, `address`, `new`, `list`, `logs`
 - Runner commands: `get`, `list`, `register`
 - `actor list` command (lasso-only) to show deployed actor addresses
