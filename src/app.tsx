@@ -30,6 +30,8 @@ export function App({ initialConfig }: AppProps) {
   const [isExecuting, setIsExecuting] = useState(false);
   const [showLogo, setShowLogo] = useState(true);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
   const addMessage = useCallback(
     (role: ConsoleMessage["role"], content: string) => {
@@ -73,6 +75,8 @@ export function App({ initialConfig }: AppProps) {
 
       setInput("");
       setShowLogo(false);
+      setHistory((prev) => [...prev, trimmed]);
+      setHistoryIndex(-1);
 
       addMessage("command", trimmed);
 
@@ -109,6 +113,25 @@ export function App({ initialConfig }: AppProps) {
     [isExecuting, exit, addMessage, executeDeployActor]
   );
 
+  const handleHistoryUp = useCallback(() => {
+    if (history.length === 0) return;
+    const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
+    setHistoryIndex(newIndex);
+    setInput(history[newIndex]);
+  }, [history, historyIndex]);
+
+  const handleHistoryDown = useCallback(() => {
+    if (historyIndex === -1) return;
+    const newIndex = historyIndex + 1;
+    if (newIndex >= history.length) {
+      setHistoryIndex(-1);
+      setInput("");
+    } else {
+      setHistoryIndex(newIndex);
+      setInput(history[newIndex]);
+    }
+  }, [history, historyIndex]);
+
   const handleInitComplete = useCallback(
     (privateKey: string) => {
       setSession((prev) => ({ ...prev, privateKey }));
@@ -144,6 +167,8 @@ export function App({ initialConfig }: AppProps) {
           value={input}
           onChange={setInput}
           onSubmit={handleSubmit}
+          onHistoryUp={handleHistoryUp}
+          onHistoryDown={handleHistoryDown}
           isDisabled={isExecuting}
         />
       )}
