@@ -1,0 +1,159 @@
+name: Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ===========================================================================
+  # TYPECHECK - Runs on all pushes to main
+  # ===========================================================================
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  # ===========================================================================
+  # BUILD - Cross-compiles Bun binaries and uploads to S3
+  # ===========================================================================
+  build:
+    name: Build Lasso Binaries
+    needs: [typecheck]
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          FULL_VERSION="v${VERSION}-${SHORT_SHA}"
+          echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $FULL_VERSION"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cross-compile binaries
+        run: |
+          mkdir -p build
+          bun build --compile --target=bun-darwin-arm64 src/cli.tsx --outfile build/lasso-darwin-arm64
+          bun build --compile --target=bun-darwin-x64   src/cli.tsx --outfile build/lasso-darwin-x64
+          bun build --compile --target=bun-linux-x64    src/cli.tsx --outfile build/lasso-linux-x64
+          bun build --compile --target=bun-linux-arm64  src/cli.tsx --outfile build/lasso-linux-arm64
+
+      - name: Configure AWS Credentials (Org)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ORG_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Assume Dev Account Role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEV_ACCOUNT_ID }}:role/OrganizationAccountAccessRole
+          aws-region: ${{ env.AWS_REGION }}
+          role-chaining: true
+          role-skip-session-tagging: true
+
+      - name: Upload to S3
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUCKET="cowboy-dev-artifacts-${{ secrets.AWS_DEV_ACCOUNT_ID }}"
+          PREFIX="binaries/lasso"
+
+          # Upload binaries
+          for binary in build/lasso-*; do
+            NAME=$(basename "$binary")
+            aws s3 cp "$binary" "s3://$BUCKET/$PREFIX/$VERSION/$NAME"
+          done
+
+          # Upload metadata
+          cat > /tmp/metadata.json << METADATA
+          {
+            "version": "$VERSION",
+            "commit": "${{ github.sha }}",
+            "branch": "main",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "actor": "${{ github.actor }}"
+          }
+          METADATA
+          aws s3 cp /tmp/metadata.json "s3://$BUCKET/$PREFIX/$VERSION/metadata.json"
+
+          # Update latest pointer
+          echo -n "$VERSION" | aws s3 cp - "s3://$BUCKET/$PREFIX/latest"
+
+          # Upload bootstrap.sh
+          aws s3 cp bootstrap.sh "s3://$BUCKET/$PREFIX/bootstrap.sh"
+
+          echo "Uploaded lasso binaries to s3://$BUCKET/$PREFIX/$VERSION/"
+
+      - name: Notify Slack
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS="Lasso Build Successful"
+            COLOR="#36a64f"
+          else
+            STATUS="Lasso Build Failed"
+            COLOR="#ff0000"
+          fi
+
+          curl -s -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"blocks\": [
+                  {
+                    \"type\": \"header\",
+                    \"text\": {\"type\": \"plain_text\", \"text\": \"$STATUS\"}
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"*Version:*\n\`${{ steps.version.outputs.version }}\`\"},
+                      {\"type\": \"mrkdwn\", \"text\": \"*Commit:*\n\`$(echo ${{ github.sha }} | cut -c1-7)\`\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"context\",
+                    \"elements\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>\"}
+                    ]
+                  }
+                ]
+              }]
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }} || true
