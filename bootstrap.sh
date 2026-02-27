@@ -70,13 +70,24 @@ echo "Downloading ${BINARY}..."
 curl -fsSL -o "$TMPFILE" "$URL"
 chmod +x "$TMPFILE"
 
-# Install to /usr/local/bin
+# Install binary
 INSTALL_DIR="/usr/local/bin"
 if [ -w "$INSTALL_DIR" ]; then
   mv "$TMPFILE" "${INSTALL_DIR}/lasso"
-else
-  echo "Installing to ${INSTALL_DIR} (requires sudo)..."
+elif [ -t 0 ]; then
+  echo "Installing to ${INSTALL_DIR} requires elevated permissions."
+  echo "Enter your password to continue:"
   sudo mv "$TMPFILE" "${INSTALL_DIR}/lasso"
+else
+  # No terminal available for sudo prompt, fall back to ~/.local/bin
+  INSTALL_DIR="${HOME}/.local/bin"
+  mkdir -p "$INSTALL_DIR"
+  mv "$TMPFILE" "${INSTALL_DIR}/lasso"
+  case ":$PATH:" in
+    *":${INSTALL_DIR}:"*) ;;
+    *) echo "Note: Add ${INSTALL_DIR} to your PATH:"
+       echo "  export PATH=\"${INSTALL_DIR}:\$PATH\"" ;;
+  esac
 fi
 
 rm -rf "$TMPDIR"
