@@ -11,7 +11,7 @@ export function Message({ message }: MessageProps) {
     case "command":
       return (
         <Box paddingX={1}>
-          <Text color="gray">{"cowboy> "}{message.content}</Text>
+          <Text color="gray">{"\u276F "}{message.content}</Text>
         </Box>
       );
 

@@ -5,6 +5,9 @@
 ### Added
 - Command history navigation with up/down arrow keys
 
+### Changed
+- Replace `cowboy>` prompt with `❯` character
+
 ## [0.1.0] - 2026-02-26
 
 ### Added
