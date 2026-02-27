@@ -1,0 +1,38 @@
+{
+  "name": "lasso",
+  "version": "0.1.0",
+  "description": "Cowboy blockchain console",
+  "type": "module",
+  "bin": {
+    "lasso": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "build": "tsup src/cli.tsx --format esm --dts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "cowboy",
+    "blockchain",
+    "cli",
+    "console"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "ink": "^6.8.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/react": "^19.2.14",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
