@@ -33,7 +33,7 @@ export function InputArea({
           <Text dimColor>Executing...</Text>
         ) : (
           <Box>
-            <Text color="green">{"cowboy> "}</Text>
+            <Text color="green">{"\u276F "}</Text>
             <TextInput
               value={value}
               onChange={onChange}
