@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Binary promotion workflow (`.github/workflows/promote.yml`)
+  - Tag-based promotion from dev S3 to stg/prd S3 (`stg-v*`, `prd-v*`)
+  - Rewrites `bootstrap.sh` CDN URL from canyon to target terrain (mesa/summit)
+  - OIDC auth chain: org role -> dev account (download) -> target account (upload)
+  - Slack notifications on promotion success/failure
 - Transfer command: `transfer --to <addr> --amount <cby>`
 - Wallet commands: `create`, `address`, `balance`
 - Token (CIP-20) commands: `create`, `transfer`, `approve`, `mint`, `burn`, `info`, `balance`, `list`
