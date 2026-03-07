@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Box, Static, useApp } from "ink";
 import { Header } from "./components/Header.js";
 import { Message } from "./components/Message.js";
@@ -7,7 +9,7 @@ import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
 import { deployActor, executeCowboy } from "./executor.js";
-import { saveConfig } from "./config.js";
+import { loadConfig, saveConfig } from "./config.js";
 import type { LassoConfig, ConsoleMessage, SessionState } from "./types.js";
 
 interface AppProps {
@@ -45,8 +47,9 @@ function commandToCowboyArgs(command: string, args: string[]): string[] {
   }
 }
 
-export function App({ initialConfig, hasProject }: AppProps) {
+export function App({ initialConfig, hasProject: initialHasProject }: AppProps) {
   const { exit } = useApp();
+  const [projectReady, setProjectReady] = useState(initialHasProject);
   const [session, setSession] = useState<SessionState>({
     validatorUrl: initialConfig.validatorUrl,
     walletAddress: initialConfig.walletAddress ?? null,
@@ -70,10 +73,10 @@ export function App({ initialConfig, hasProject }: AppProps) {
 
   // Show warning if .cowboy directory not found
   useEffect(() => {
-    if (!hasProject) {
+    if (!projectReady) {
       addMessage(
         "system",
-        "No .cowboy/ project found in current directory. Run init to start."
+        "No .cowboy/ project found in current directory. Run init <local|dev> to start."
       );
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -138,12 +141,18 @@ export function App({ initialConfig, hasProject }: AppProps) {
           const cowboyArgs = commandToCowboyArgs(command, args);
           const result = await executeCowboy(cowboyArgs, session.validatorUrl);
 
-          // Extract wallet address
+          // Extract wallet address and reload config (picks up new rpc_url)
           const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
           if (walletMatch) {
             const walletAddress = walletMatch[1];
-            setSession((prev) => ({ ...prev, walletAddress }));
-            saveConfig({ ...initialConfig, walletAddress });
+            const freshConfig = loadConfig();
+            setSession((prev) => ({ ...prev, walletAddress, validatorUrl: freshConfig.validatorUrl }));
+            saveConfig({ ...freshConfig, walletAddress });
+          }
+
+          // Mark project as ready (init creates .cowboy/)
+          if (existsSync(join(process.cwd(), ".cowboy"))) {
+            setProjectReady(true);
           }
 
           // Strip everything from "Next steps:" onward and replace
@@ -221,6 +230,10 @@ export function App({ initialConfig, hasProject }: AppProps) {
           break;
 
         case "execute":
+          if (!projectReady && result.command !== "init") {
+            addMessage("error", "No project initialized. Run init <local|dev> first.");
+            break;
+          }
           await executeCommand(result.command, result.args);
           break;
       }
@@ -272,7 +285,7 @@ export function App({ initialConfig, hasProject }: AppProps) {
 
       <StatusBar
         validatorUrl={session.validatorUrl}
-        hasKey={hasProject}
+        hasKey={projectReady}
         walletAddress={session.walletAddress}
       />
     </Box>

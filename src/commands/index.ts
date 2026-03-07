@@ -50,7 +50,7 @@ export function parseCommand(input: string): CommandResult {
     case "init": {
       const env = parts[1]?.toLowerCase();
       if (!env || !["dev", "local"].includes(env)) {
-        return { type: "error", text: "Usage: init <dev|local>" };
+        return { type: "error", text: "Usage: init <local|dev>" };
       }
       return { type: "execute", command: "init", args: [env] };
     }
