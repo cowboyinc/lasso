@@ -180,6 +180,224 @@ export function parseCommand(input: string): CommandResult {
       }
     }
 
+    case "transfer": {
+      const { flags } = parseFlags(parts.slice(1));
+      if (!flags.to || !flags.amount) {
+        return { type: "error", text: "Usage: transfer --to <address> --amount <cby>" };
+      }
+      return { type: "execute", command: "transfer", args: ["--to", flags.to, "--amount", flags.amount] };
+    }
+
+    case "wallet": {
+      const sub = parts[1]?.toLowerCase();
+      const rest = parts.slice(2);
+
+      switch (sub) {
+        case "create": {
+          const { flags } = parseFlags(rest);
+          const args: string[] = [];
+          if (flags.output) args.push("--output", flags.output);
+          return { type: "execute", command: "wallet-create", args };
+        }
+
+        case "address": {
+          const { flags } = parseFlags(rest);
+          const args: string[] = [];
+          if (flags.key) args.push("--key", flags.key);
+          return { type: "execute", command: "wallet-address", args };
+        }
+
+        case "balance": {
+          const { flags } = parseFlags(rest);
+          const args: string[] = [];
+          if (flags.key) args.push("--key", flags.key);
+          return { type: "execute", command: "wallet-balance", args };
+        }
+
+        default:
+          return {
+            type: "error",
+            text: `Unknown wallet command: ${sub || "(none)"}. Type help for available commands.`,
+          };
+      }
+    }
+
+    case "token": {
+      const sub = parts[1]?.toLowerCase();
+      const rest = parts.slice(2);
+
+      switch (sub) {
+        case "create": {
+          const { flags } = parseFlags(rest);
+          if (!flags.name || !flags.symbol || !flags["initial-supply"]) {
+            return {
+              type: "error",
+              text: "Usage: token create --name <n> --symbol <s> --initial-supply <amount> [--decimals <d>] [--max-supply <m>]",
+            };
+          }
+          const args = ["--name", flags.name, "--symbol", flags.symbol, "--initial-supply", flags["initial-supply"]];
+          if (flags.decimals) args.push("--decimals", flags.decimals);
+          if (flags["max-supply"]) args.push("--max-supply", flags["max-supply"]);
+          return { type: "execute", command: "token-create", args };
+        }
+
+        case "transfer": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"] || !flags.to || !flags.amount) {
+            return {
+              type: "error",
+              text: "Usage: token transfer --token-id <id> --to <address> --amount <n>",
+            };
+          }
+          return {
+            type: "execute",
+            command: "token-transfer",
+            args: ["--token-id", flags["token-id"], "--to", flags.to, "--amount", flags.amount],
+          };
+        }
+
+        case "approve": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"] || !flags.spender || !flags.amount) {
+            return {
+              type: "error",
+              text: "Usage: token approve --token-id <id> --spender <address> --amount <n>",
+            };
+          }
+          return {
+            type: "execute",
+            command: "token-approve",
+            args: ["--token-id", flags["token-id"], "--spender", flags.spender, "--amount", flags.amount],
+          };
+        }
+
+        case "mint": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"] || !flags.to || !flags.amount) {
+            return {
+              type: "error",
+              text: "Usage: token mint --token-id <id> --to <address> --amount <n>",
+            };
+          }
+          return {
+            type: "execute",
+            command: "token-mint",
+            args: ["--token-id", flags["token-id"], "--to", flags.to, "--amount", flags.amount],
+          };
+        }
+
+        case "burn": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"] || !flags.amount) {
+            return {
+              type: "error",
+              text: "Usage: token burn --token-id <id> --amount <n>",
+            };
+          }
+          return {
+            type: "execute",
+            command: "token-burn",
+            args: ["--token-id", flags["token-id"], "--amount", flags.amount],
+          };
+        }
+
+        case "info": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"]) {
+            return { type: "error", text: "Usage: token info --token-id <id>" };
+          }
+          return { type: "execute", command: "token-info", args: ["--token-id", flags["token-id"]] };
+        }
+
+        case "balance": {
+          const { flags } = parseFlags(rest);
+          if (!flags["token-id"] || !flags.address) {
+            return {
+              type: "error",
+              text: "Usage: token balance --token-id <id> --address <address>",
+            };
+          }
+          return {
+            type: "execute",
+            command: "token-balance",
+            args: ["--token-id", flags["token-id"], "--address", flags.address],
+          };
+        }
+
+        case "list":
+          return { type: "execute", command: "token-list", args: [] };
+
+        default:
+          return {
+            type: "error",
+            text: `Unknown token command: ${sub || "(none)"}. Type help for available commands.`,
+          };
+      }
+    }
+
+    case "watchtower": {
+      const sub = parts[1]?.toLowerCase();
+      const rest = parts.slice(2);
+
+      switch (sub) {
+        case "new": {
+          const resource = rest[0]?.toLowerCase();
+          if (resource !== "feed") {
+            return { type: "error", text: "Usage: watchtower new feed --name <n> [--description <d>]" };
+          }
+          const { flags } = parseFlags(rest.slice(1));
+          if (!flags.name) {
+            return { type: "error", text: "Usage: watchtower new feed --name <n> [--description <d>]" };
+          }
+          const args = ["--name", flags.name];
+          if (flags.description) args.push("--description", flags.description);
+          return { type: "execute", command: "watchtower-new-feed", args };
+        }
+
+        case "feed": {
+          const feedId = rest[0];
+          const feedSub = rest[1]?.toLowerCase();
+          if (!feedId || !feedSub) {
+            return { type: "error", text: "Usage: watchtower feed <id> <publish|subscribers>" };
+          }
+
+          if (feedSub === "publish") {
+            const { flags } = parseFlags(rest.slice(2));
+            if (!flags.data) {
+              return { type: "error", text: "Usage: watchtower feed <id> publish --data <json>" };
+            }
+            return {
+              type: "execute",
+              command: "watchtower-feed-publish",
+              args: [feedId, "publish", "--data", flags.data],
+            };
+          }
+
+          if (feedSub === "subscribers") {
+            return {
+              type: "execute",
+              command: "watchtower-feed-subscribers",
+              args: [feedId, "subscribers"],
+            };
+          }
+
+          return { type: "error", text: "Usage: watchtower feed <id> <publish|subscribers>" };
+        }
+
+        case "list":
+          return { type: "execute", command: "watchtower-list", args: [] };
+
+        case "feeds":
+          return { type: "execute", command: "watchtower-feeds", args: [] };
+
+        default:
+          return {
+            type: "error",
+            text: `Unknown watchtower command: ${sub || "(none)"}. Type help for available commands.`,
+          };
+      }
+    }
+
     default:
       return {
         type: "error",
@@ -193,10 +411,16 @@ function handleHelp(): CommandResult {
     "Commands:",
     "",
     "  General:",
-    "    init <dev|local>                        Initialize project environment",
+    "    init <local|dev>                        Initialize project environment",
+    "    transfer --to <addr> --amount <cby>     Transfer CBY to an address",
     "    help                                    Show this help",
     "    clear                                   Clear the console",
     "    exit                                    Quit lasso",
+    "",
+    "  Wallet:",
+    "    wallet create [--output <path>]         Generate a new keypair",
+    "    wallet address [--key <path>]           Show wallet address",
+    "    wallet balance [--key <path>]           Show wallet balance",
     "",
     "  Actor:",
     "    actor deploy <file.py>                  Deploy an actor to the chain",
@@ -213,6 +437,30 @@ function handleHelp(): CommandResult {
     "    runner get --address <a>                Get runner details",
     "    runner list                             List all runners",
     "    runner register --stake <amount>        Register as a runner",
+    "",
+    "  Token (CIP-20):",
+    "    token create --name <n> --symbol <s> --initial-supply <n>",
+    "                                            Create a new token",
+    "    token transfer --token-id <id> --to <addr> --amount <n>",
+    "                                            Transfer tokens",
+    "    token approve --token-id <id> --spender <addr> --amount <n>",
+    "                                            Approve spender",
+    "    token mint --token-id <id> --to <addr> --amount <n>",
+    "                                            Mint tokens",
+    "    token burn --token-id <id> --amount <n> Burn tokens",
+    "    token info --token-id <id>              Show token info",
+    "    token balance --token-id <id> --address <addr>",
+    "                                            Show token balance",
+    "    token list                              List all tokens",
+    "",
+    "  Watchtower:",
+    "    watchtower new feed --name <n> [--description <d>]",
+    "                                            Create a new data feed",
+    "    watchtower feed <id> publish --data <json>",
+    "                                            Publish data to a feed",
+    "    watchtower feed <id> subscribers        List feed subscribers",
+    "    watchtower list                         List all feeds",
+    "    watchtower feeds                        List your feeds",
   ].join("\n");
 
   return { type: "output", text: helpText };

@@ -42,6 +42,40 @@ function commandToCowboyArgs(command: string, args: string[]): string[] {
       return ["runner", "list"];
     case "runner-register":
       return ["runner", "register", ...args];
+    case "transfer":
+      return ["transfer", ...args];
+    case "wallet-create":
+      return ["wallet", "create", ...args];
+    case "wallet-address":
+      return ["wallet", "address", ...args];
+    case "wallet-balance":
+      return ["wallet", "balance", ...args];
+    case "token-create":
+      return ["token", "create", ...args];
+    case "token-transfer":
+      return ["token", "transfer", ...args];
+    case "token-approve":
+      return ["token", "approve", ...args];
+    case "token-mint":
+      return ["token", "mint", ...args];
+    case "token-burn":
+      return ["token", "burn", ...args];
+    case "token-info":
+      return ["token", "info", ...args];
+    case "token-balance":
+      return ["token", "balance", ...args];
+    case "token-list":
+      return ["token", "list"];
+    case "watchtower-new-feed":
+      return ["watchtower", "new", "feed", ...args];
+    case "watchtower-feed-publish":
+      return ["watchtower", "feed", ...args];
+    case "watchtower-feed-subscribers":
+      return ["watchtower", "feed", ...args];
+    case "watchtower-list":
+      return ["watchtower", "list"];
+    case "watchtower-feeds":
+      return ["watchtower", "feeds"];
     default:
       return args;
   }
