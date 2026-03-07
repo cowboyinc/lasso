@@ -1,0 +1,217 @@
+name: Promote Lasso Binary
+
+# Tag-based promotion: build once in dev, promote same binaries to stg/prd
+# Usage:
+#   git tag stg-v0.1.1-abc1234 && git push --tags   -> deploys to stg
+#   git tag prd-v0.1.1-abc1234 && git push --tags   -> deploys to prd (with approval)
+
+on:
+  push:
+    tags:
+      - 'stg-v*'
+      - 'prd-v*'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  promote:
+    name: Promote Lasso to ${{ contains(github.ref, 'prd-') && 'production' || 'staging' }}
+    runs-on: ubuntu-latest
+    environment: ${{ contains(github.ref, 'prd-') && 'production' || 'staging' }}
+
+    steps:
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $TAG"
+
+          if [[ "$TAG" == stg-* ]]; then
+            ENVIRONMENT="stg"
+            VERSION="${TAG#stg-}"
+          elif [[ "$TAG" == prd-* ]]; then
+            ENVIRONMENT="prd"
+            VERSION="${TAG#prd-}"
+          else
+            echo "ERROR: Unknown tag format: $TAG"
+            exit 1
+          fi
+
+          # Map environment to terrain name for CDN domain
+          case "$ENVIRONMENT" in
+            stg) TERRAIN="mesa" ;;
+            prd) TERRAIN="summit" ;;
+            *)   TERRAIN="$ENVIRONMENT" ;;
+          esac
+
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "terrain=$TERRAIN" >> $GITHUB_OUTPUT
+          echo "Environment: $ENVIRONMENT"
+          echo "Version: $VERSION"
+          echo "Terrain: $TERRAIN"
+
+      - name: Configure AWS Credentials (Org)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ORG_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Assume Dev Account Role (source)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_DEV_ACCOUNT_ID }}:role/OrganizationAccountAccessRole
+          aws-region: ${{ env.AWS_REGION }}
+          role-chaining: true
+          role-skip-session-tagging: true
+
+      - name: Verify binaries exist in dev
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          DEV_BUCKET="cowboy-dev-artifacts-${{ secrets.AWS_DEV_ACCOUNT_ID }}"
+
+          echo "Checking for Lasso binaries: s3://$DEV_BUCKET/binaries/lasso/$VERSION/"
+          COUNT=$(aws s3 ls "s3://$DEV_BUCKET/binaries/lasso/$VERSION/" | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: No Lasso binaries found in dev S3 bucket"
+            echo "Version $VERSION has not been built. Push to main first."
+            exit 1
+          fi
+
+          echo "Found $COUNT files in dev bucket"
+
+      - name: Download binaries from dev
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          DEV_BUCKET="cowboy-dev-artifacts-${{ secrets.AWS_DEV_ACCOUNT_ID }}"
+
+          mkdir -p /tmp/promote
+          aws s3 cp "s3://$DEV_BUCKET/binaries/lasso/$VERSION/" /tmp/promote/ --recursive
+          echo "Downloaded binaries:"
+          ls -la /tmp/promote/
+
+      - name: Download bootstrap.sh from dev
+        run: |
+          DEV_BUCKET="cowboy-dev-artifacts-${{ secrets.AWS_DEV_ACCOUNT_ID }}"
+          aws s3 cp "s3://$DEV_BUCKET/binaries/lasso/bootstrap.sh" /tmp/promote/bootstrap-original.sh
+
+      - name: Rewrite bootstrap.sh for target environment
+        run: |
+          TERRAIN="${{ steps.parse.outputs.terrain }}"
+
+          # Rewrite the CDN URL from canyon to target terrain
+          sed "s|https://lasso.canyon.cowboylabs.net|https://lasso.$TERRAIN.cowboylabs.net|g" \
+            /tmp/promote/bootstrap-original.sh > /tmp/promote/bootstrap.sh
+
+          echo "Bootstrap URL rewritten for $TERRAIN"
+          grep -n "cowboylabs.net" /tmp/promote/bootstrap.sh || true
+
+      - name: Determine target account
+        id: target
+        run: |
+          ENV="${{ steps.parse.outputs.environment }}"
+          if [ "$ENV" = "stg" ]; then
+            ACCOUNT_ID="${{ secrets.AWS_STG_ACCOUNT_ID }}"
+          elif [ "$ENV" = "prd" ]; then
+            ACCOUNT_ID="${{ secrets.AWS_PRD_ACCOUNT_ID }}"
+          fi
+
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "ERROR: No account ID configured for environment: $ENV"
+            echo "Set AWS_STG_ACCOUNT_ID or AWS_PRD_ACCOUNT_ID in GitHub secrets"
+            exit 1
+          fi
+
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials (Org) - for target
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ORG_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Assume Target Account Role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ steps.target.outputs.account_id }}:role/OrganizationAccountAccessRole
+          aws-region: ${{ env.AWS_REGION }}
+          role-chaining: true
+          role-skip-session-tagging: true
+
+      - name: Upload binaries to target account
+        run: |
+          VERSION="${{ steps.parse.outputs.version }}"
+          ENV="${{ steps.parse.outputs.environment }}"
+          TERRAIN="${{ steps.parse.outputs.terrain }}"
+          ACCOUNT_ID="${{ steps.target.outputs.account_id }}"
+          TARGET_BUCKET="$TERRAIN-artifacts-$ACCOUNT_ID"
+
+          echo "Uploading Lasso binaries to s3://$TARGET_BUCKET/binaries/lasso/$VERSION/"
+
+          # Upload binaries and metadata (exclude bootstrap files)
+          for file in /tmp/promote/lasso-* /tmp/promote/metadata.json; do
+            [ -f "$file" ] && aws s3 cp "$file" "s3://$TARGET_BUCKET/binaries/lasso/$VERSION/$(basename "$file")"
+          done
+
+          # Upload rewritten bootstrap.sh
+          aws s3 cp /tmp/promote/bootstrap.sh "s3://$TARGET_BUCKET/binaries/lasso/bootstrap.sh"
+
+          # Update latest pointer
+          echo -n "$VERSION" | aws s3 cp - "s3://$TARGET_BUCKET/binaries/lasso/latest"
+
+          echo "Lasso binaries promoted to $ENV ($TERRAIN)"
+
+      - name: Notify Slack
+        if: always()
+        run: |
+          ENV="${{ steps.parse.outputs.environment }}"
+          VERSION="${{ steps.parse.outputs.version }}"
+          TERRAIN="${{ steps.parse.outputs.terrain }}"
+          ENV_UPPER=$(echo "$TERRAIN" | tr '[:lower:]' '[:upper:]')
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS="Lasso $ENV_UPPER Promotion Successful"
+            COLOR="#36a64f"
+          else
+            STATUS="Lasso $ENV_UPPER Promotion Failed"
+            COLOR="#ff0000"
+          fi
+
+          curl -s -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"blocks\": [
+                  {
+                    \"type\": \"header\",
+                    \"text\": {\"type\": \"plain_text\", \"text\": \"$STATUS\"}
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"*Environment:*\n$TERRAIN ($ENV)\"},
+                      {\"type\": \"mrkdwn\", \"text\": \"*Version:*\n\`$VERSION\`\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"*Promoted by:*\n${{ github.actor }}\"},
+                      {\"type\": \"mrkdwn\", \"text\": \"*Install:*\n\`lasso.$TERRAIN.cowboylabs.net\`\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"context\",
+                    \"elements\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>\"}
+                    ]
+                  }
+                ]
+              }]
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }} || true
