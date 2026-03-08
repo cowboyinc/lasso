@@ -3,6 +3,28 @@
 ## [Unreleased]
 
 ### Added
+- Binary promotion workflow (`.github/workflows/promote.yml`)
+  - Tag-based promotion from dev S3 to stg/prd S3 (`stg-v*`, `prd-v*`)
+  - Rewrites `bootstrap.sh` CDN URL from canyon to target terrain (mesa/summit)
+  - OIDC auth chain: org role -> dev account (download) -> target account (upload)
+  - Slack notifications on promotion success/failure
+- Transfer command: `transfer --to <addr> --amount <cby>`
+- Wallet commands: `create`, `address`, `balance`
+- Token (CIP-20) commands: `create`, `transfer`, `approve`, `mint`, `burn`, `info`, `balance`, `list`
+- Watchtower commands: `new feed`, `feed <id> publish`, `feed <id> subscribers`, `list`, `feeds`
+- Block commands until project is initialized (only `init`, `help`, `clear`, `exit` allowed)
+
+### Changed
+- Read RPC URL from `.cowboy/config.json` instead of hardcoded constant
+- After `init`, reload config to pick up the new RPC URL dynamically
+- Help text updated with all new command groups
+
+### Removed
+- Hardcoded `VALIDATOR_URL` constant (now reads from project config)
+
+## [0.1.1] - 2026-02-26
+
+### Added
 - Bun binary distribution pipeline (`.github/workflows/pipeline.yml`)
   - Typecheck job on all pushes to main
   - Cross-compile 4 platform binaries (darwin-arm64, darwin-x64, linux-x64, linux-arm64)
