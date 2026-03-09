@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProjectConfig } from "./types.js";
+import type { ActorEntry, ProjectConfig } from "./types.js";
 
 const CONFIG_PATH = join(process.cwd(), ".cowboy", "config.json");
 const DEFAULT_RPC_URL = "http://localhost:4000";
@@ -19,10 +19,14 @@ export function loadProjectConfig(): ProjectConfig | null {
       return null;
     }
     const env = config.environments[active];
+    const rawActors: unknown[] = env.actors ?? [];
+    const actors: ActorEntry[] = rawActors.map((a) =>
+      typeof a === "string" ? { address: a, label: "" } : (a as ActorEntry)
+    );
     return {
       validatorUrl: env.rpc_url ?? DEFAULT_RPC_URL,
       walletAddress: env.wallet_address ?? null,
-      actors: env.actors ?? [],
+      actors,
     };
   } catch {
     return null;
@@ -33,7 +37,7 @@ export function loadProjectConfig(): ProjectConfig | null {
  * Merge the actors array into the active environment in .cowboy/config.json.
  * Preserves all other fields (key_file, rpc_url, watchtower_registry, etc).
  */
-export function saveActors(actors: string[]): void {
+export function saveActors(actors: ActorEntry[]): void {
   const raw = readFileSync(CONFIG_PATH, "utf-8");
   const config = JSON.parse(raw);
   const active = config?.active;

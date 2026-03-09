@@ -1,13 +1,18 @@
+export interface ActorEntry {
+  address: string;
+  label: string;
+}
+
 export interface ProjectConfig {
   validatorUrl: string;
   walletAddress: string | null;
-  actors: string[];
+  actors: ActorEntry[];
 }
 
 export interface SessionState {
   validatorUrl: string;
   walletAddress: string | null;
-  actors: string[];
+  actors: ActorEntry[];
 }
 
 export interface ConsoleMessage {

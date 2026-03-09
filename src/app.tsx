@@ -10,7 +10,8 @@ import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
 import { deployActor, executeCowboy } from "./executor.js";
 import { loadProjectConfig, saveActors } from "./config.js";
-import type { ProjectConfig, ConsoleMessage, SessionState } from "./types.js";
+import { basename, dirname } from "node:path";
+import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState } from "./types.js";
 
 interface AppProps {
   initialConfig: ProjectConfig;
@@ -126,14 +127,18 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             session.validatorUrl
           );
 
-          // Extract actor address and save to config
+          // Extract actor address and auto-label from filename
           const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
           if (actorMatch) {
             const actorAddress = `0x${actorMatch[1]}`;
+            const filePath = args[0];
+            const fileName = basename(filePath, ".py");
+            const label = fileName === "main" ? basename(dirname(filePath)) : fileName;
             setSession((prev) => {
-              const actors = prev.actors.includes(actorAddress)
+              const exists = prev.actors.some((a) => a.address === actorAddress);
+              const actors = exists
                 ? prev.actors
-                : [...prev.actors, actorAddress];
+                : [...prev.actors, { address: actorAddress, label }];
               saveActors(actors);
               return { ...prev, actors };
             });
@@ -162,9 +167,43 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         if (session.actors.length === 0) {
           addMessage("output", "No actors deployed yet.");
         } else {
-          const list = session.actors.map((a, i) => `  ${i + 1}. ${a}`).join("\n");
+          const list = session.actors
+            .map((a, i) => {
+              const suffix = a.label ? `  ${a.label}` : "";
+              return `  ${i + 1}. ${a.address}${suffix}`;
+            })
+            .join("\n");
           addMessage("output", `Deployed actors:\n${list}`);
         }
+        return;
+      }
+
+      // actor label sets a label on an existing actor
+      if (command === "actor-label") {
+        const identifier = args[0];
+        const label = args.slice(1).join(" ");
+        const pos = Number(identifier);
+        let index = -1;
+
+        if (!isNaN(pos) && !identifier.startsWith("0x")) {
+          index = pos - 1;
+        } else {
+          index = session.actors.findIndex((a) => a.address === identifier);
+        }
+
+        if (index < 0 || index >= session.actors.length) {
+          addMessage("error", `Actor not found: ${identifier}`);
+          return;
+        }
+
+        setSession((prev) => {
+          const actors = prev.actors.map((a, i) =>
+            i === index ? { ...a, label } : a
+          );
+          saveActors(actors);
+          return { ...prev, actors };
+        });
+        addMessage("output", `Label set: ${session.actors[index].address}  ${label}`);
         return;
       }
 

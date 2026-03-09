@@ -137,6 +137,18 @@ export function parseCommand(input: string): CommandResult {
           return { type: "execute", command: "actor-new", args: [name] };
         }
 
+        case "label": {
+          const identifier = rest[0];
+          const labelText = rest.slice(1).join(" ");
+          if (!identifier || !labelText) {
+            return {
+              type: "error",
+              text: "Usage: actor label <address|#> <text>",
+            };
+          }
+          return { type: "execute", command: "actor-label", args: [identifier, labelText] };
+        }
+
         case "list":
           return { type: "execute", command: "actor-list", args: [] };
 
@@ -438,6 +450,7 @@ function handleHelp(): CommandResult {
     "    actor address --code <f> --creator <c> --salt <s>",
     "                                            Compute actor address",
     "    actor new <name>                        Scaffold a new actor project",
+    "    actor label <address|#> <text>           Set a label for an actor",
     "    actor list                              List deployed actors",
     "    actor logs --address <a>                View actor logs",
     "",
