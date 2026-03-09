@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.2] - 2026-03-09
+
+### Added
+- Actor labels: `actor label <address|#> <text>` sets a human-readable label on deployed actors
+- Auto-label on deploy: extracts filename as default label (e.g. `father_jokes.py` -> `father_jokes`, `hello/main.py` -> `hello`)
+- `actor list` now shows labels next to addresses
+- Auto-migration: old `string[]` actor configs are upgraded to `{address, label}` format on load
 
 ### Changed
 - `actor execute` default gas limits increased to 500K cycles/cells (was using CLI default 200K, insufficient for runner jobs)
