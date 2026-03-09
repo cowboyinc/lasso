@@ -1,13 +1,18 @@
+export interface ActorEntry {
+  address: string;
+  label: string;
+}
+
+export interface ProjectConfig {
+  validatorUrl: string;
+  walletAddress: string | null;
+  actors: ActorEntry[];
+}
+
 export interface SessionState {
   validatorUrl: string;
   walletAddress: string | null;
-  actors: string[];
-}
-
-export interface LassoConfig {
-  validatorUrl: string;
-  walletAddress?: string;
-  actors?: string[];
+  actors: ActorEntry[];
 }
 
 export interface ConsoleMessage {

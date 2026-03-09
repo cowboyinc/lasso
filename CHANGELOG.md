@@ -1,6 +1,29 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.2] - 2026-03-09
+
+### Added
+- Actor labels: `actor label <address|#> <text>` sets a human-readable label on deployed actors
+- Auto-label on deploy: extracts filename as default label (e.g. `father_jokes.py` -> `father_jokes`, `hello/main.py` -> `hello`)
+- `actor list` now shows labels next to addresses
+- Auto-migration: old `string[]` actor configs are upgraded to `{address, label}` format on load
+
+### Changed
+- `actor execute` default gas limits increased to 500K cycles/cells (was using CLI default 200K, insufficient for runner jobs)
+- Config uses `.cowboy/config.json` only (removed `~/.lasso/config.json` global config)
+- Actors stored per-environment in project config (`environments[active].actors`)
+- Init reloads full session state from project config instead of merging with stale global
+- `actor execute` accepts positional args: `actor execute <address> <method> [--payload <hex>]`
+- Default payload to empty JSON (`7b7d`) when not provided
+
+### Fixed
+- Actor deploy: address regex now handles `0x` prefix (was capturing just `"0"`)
+- Actor deploy: addresses stored with `0x` prefix for consistency
+- Init: clears stale actors from previous environment
+- Init: reads RPC URL from project config (`.cowboy/config.json`) instead of stale global config
+
+### Removed
+- `~/.lasso/config.json` global config file (single source of truth is now `.cowboy/config.json`)
 
 ### Added
 - Binary promotion workflow (`.github/workflows/promote.yml`)

@@ -84,17 +84,25 @@ export function parseCommand(input: string): CommandResult {
         }
 
         case "execute": {
-          const { flags } = parseFlags(rest);
-          if (!flags.actor || !flags.handler) {
+          const { flags, positional } = parseFlags(rest);
+          const actor = flags.actor ?? positional[0];
+          const handler = flags.handler ?? positional[1];
+          if (!actor || !handler) {
             return {
               type: "error",
-              text: "Usage: actor execute --actor <address> --handler <method> [--payload <json>]",
+              text: "Usage: actor execute <address> <method> [--payload <json>]",
             };
           }
-          const args = ["--actor", flags.actor, "--handler", flags.handler];
-          if (flags.payload) {
-            args.push("--payload", flags.payload);
-          }
+          const payload = flags.payload ?? "7b7d";
+          const cyclesLimit = flags["cycles-limit"] ?? "500000";
+          const cellsLimit = flags["cells-limit"] ?? "500000";
+          const args = [
+            "--actor", actor,
+            "--handler", handler,
+            "--payload", payload,
+            "--cycles-limit", cyclesLimit,
+            "--cells-limit", cellsLimit,
+          ];
           return { type: "execute", command: "actor-execute", args };
         }
 
@@ -127,6 +135,18 @@ export function parseCommand(input: string): CommandResult {
             return { type: "error", text: "Usage: actor new <name>" };
           }
           return { type: "execute", command: "actor-new", args: [name] };
+        }
+
+        case "label": {
+          const identifier = rest[0];
+          const labelText = rest.slice(1).join(" ");
+          if (!identifier || !labelText) {
+            return {
+              type: "error",
+              text: "Usage: actor label <address|#> <text>",
+            };
+          }
+          return { type: "execute", command: "actor-label", args: [identifier, labelText] };
         }
 
         case "list":
@@ -424,12 +444,13 @@ function handleHelp(): CommandResult {
     "",
     "  Actor:",
     "    actor deploy <file.py>                  Deploy an actor to the chain",
-    "    actor execute --actor <a> --handler <h> [--payload <json>]",
+    "    actor execute <address> <method> [--payload <json>]",
     "                                            Execute an actor handler",
     "    actor get --address <a>                 Get actor details",
     "    actor address --code <f> --creator <c> --salt <s>",
     "                                            Compute actor address",
     "    actor new <name>                        Scaffold a new actor project",
+    "    actor label <address|#> <text>           Set a label for an actor",
     "    actor list                              List deployed actors",
     "    actor logs --address <a>                View actor logs",
     "",

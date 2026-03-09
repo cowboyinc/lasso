@@ -4,11 +4,11 @@ import { render } from "ink";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { App } from "./app.js";
-import { loadConfig } from "./config.js";
+import { loadProjectConfig } from "./config.js";
 
 function main() {
-  const config = loadConfig();
-  const hasProject = existsSync(join(process.cwd(), ".cowboy"));
+  const config = loadProjectConfig();
+  const hasProject = config !== null && existsSync(join(process.cwd(), ".cowboy"));
 
   // Push cursor to bottom so the console starts at the bottom of the screen
   const padding = (process.stdout.rows || 24) - 4;
@@ -16,7 +16,12 @@ function main() {
     process.stdout.write("\n".repeat(padding));
   }
 
-  render(<App initialConfig={config} hasProject={hasProject} />);
+  render(
+    <App
+      initialConfig={config ?? { validatorUrl: "http://localhost:4000", walletAddress: null, actors: [] }}
+      hasProject={hasProject}
+    />
+  );
 }
 
 main();
