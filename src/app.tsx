@@ -94,7 +94,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const nextIdRef = useRef(0);
   const [input, setInput] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
-  const [showLogo, setShowLogo] = useState(true);
+
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
@@ -278,7 +278,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (!trimmed || isExecuting) return;
 
       setInput("");
-      setShowLogo(false);
+
       setHistory((prev) => [...prev, trimmed]);
       setHistoryIndex(-1);
 
@@ -336,7 +336,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   return (
     <Box flexDirection="column">
-      <Static items={showLogo ? [{ id: "header", type: "header" as const }, ...messages] : messages}>
+      <Static items={[{ id: "header", type: "header" as const }, ...messages]}>
         {(item) => {
           if ("type" in item && item.type === "header") {
             return <Header key="header" />;
