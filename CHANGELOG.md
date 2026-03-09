@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- `actor execute` default gas limits increased to 500K cycles/cells (was using CLI default 200K, insufficient for runner jobs)
 - Config uses `.cowboy/config.json` only (removed `~/.lasso/config.json` global config)
 - Actors stored per-environment in project config (`environments[active].actors`)
 - Init reloads full session state from project config instead of merging with stale global
