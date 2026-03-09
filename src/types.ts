@@ -1,13 +1,13 @@
-export interface SessionState {
+export interface ProjectConfig {
   validatorUrl: string;
   walletAddress: string | null;
   actors: string[];
 }
 
-export interface LassoConfig {
+export interface SessionState {
   validatorUrl: string;
-  walletAddress?: string;
-  actors?: string[];
+  walletAddress: string | null;
+  actors: string[];
 }
 
 export interface ConsoleMessage {

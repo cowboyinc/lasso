@@ -9,11 +9,11 @@ import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
 import { deployActor, executeCowboy } from "./executor.js";
-import { loadConfig, saveConfig } from "./config.js";
-import type { LassoConfig, ConsoleMessage, SessionState } from "./types.js";
+import { loadProjectConfig, saveActors } from "./config.js";
+import type { ProjectConfig, ConsoleMessage, SessionState } from "./types.js";
 
 interface AppProps {
-  initialConfig: LassoConfig;
+  initialConfig: ProjectConfig;
   hasProject: boolean;
 }
 
@@ -86,8 +86,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [projectReady, setProjectReady] = useState(initialHasProject);
   const [session, setSession] = useState<SessionState>({
     validatorUrl: initialConfig.validatorUrl,
-    walletAddress: initialConfig.walletAddress ?? null,
-    actors: initialConfig.actors ?? [],
+    walletAddress: initialConfig.walletAddress,
+    actors: initialConfig.actors,
   });
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
@@ -127,14 +127,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           );
 
           // Extract actor address and save to config
-          const actorMatch = result.match(/Actor address:\s*([a-fA-F0-9]+)/);
+          const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
           if (actorMatch) {
-            const actorAddress = actorMatch[1];
+            const actorAddress = `0x${actorMatch[1]}`;
             setSession((prev) => {
               const actors = prev.actors.includes(actorAddress)
                 ? prev.actors
                 : [...prev.actors, actorAddress];
-              saveConfig({ ...initialConfig, walletAddress: prev.walletAddress ?? undefined, actors });
+              saveActors(actors);
               return { ...prev, actors };
             });
           }
@@ -175,17 +175,18 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           const cowboyArgs = commandToCowboyArgs(command, args);
           const result = await executeCowboy(cowboyArgs, session.validatorUrl);
 
-          // Extract wallet address and reload config (picks up new rpc_url)
-          const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
-          if (walletMatch) {
-            const walletAddress = walletMatch[1];
-            const freshConfig = loadConfig();
-            setSession((prev) => ({ ...prev, walletAddress, validatorUrl: freshConfig.validatorUrl }));
-            saveConfig({ ...freshConfig, walletAddress });
-          }
-
-          // Mark project as ready (init creates .cowboy/)
-          if (existsSync(join(process.cwd(), ".cowboy"))) {
+          // Re-read project config written by the CLI
+          const freshConfig = loadProjectConfig();
+          if (freshConfig) {
+            // CLI doesn't write wallet_address to config — extract from output
+            const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
+            setSession({
+              validatorUrl: freshConfig.validatorUrl,
+              walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
+              actors: freshConfig.actors,
+            });
+            setProjectReady(true);
+          } else if (existsSync(join(process.cwd(), ".cowboy"))) {
             setProjectReady(true);
           }
 

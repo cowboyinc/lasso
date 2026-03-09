@@ -1,4 +1,5 @@
-export const VERSION = "0.1.0";
+import pkg from "../package.json" with { type: "json" };
+export const VERSION: string = pkg.version;
 
 export const LOGO_TEXT = [
   "                                                  _  _",
