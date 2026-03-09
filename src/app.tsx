@@ -9,11 +9,12 @@ import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
 import { deployActor, executeCowboy } from "./executor.js";
-import { loadConfig, saveConfig } from "./config.js";
-import type { LassoConfig, ConsoleMessage, SessionState } from "./types.js";
+import { loadProjectConfig, saveActors } from "./config.js";
+import { basename, dirname } from "node:path";
+import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState } from "./types.js";
 
 interface AppProps {
-  initialConfig: LassoConfig;
+  initialConfig: ProjectConfig;
   hasProject: boolean;
 }
 
@@ -86,14 +87,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [projectReady, setProjectReady] = useState(initialHasProject);
   const [session, setSession] = useState<SessionState>({
     validatorUrl: initialConfig.validatorUrl,
-    walletAddress: initialConfig.walletAddress ?? null,
-    actors: initialConfig.actors ?? [],
+    walletAddress: initialConfig.walletAddress,
+    actors: initialConfig.actors,
   });
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
   const [input, setInput] = useState("");
   const [isExecuting, setIsExecuting] = useState(false);
-  const [showLogo, setShowLogo] = useState(true);
+
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
@@ -126,15 +127,19 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             session.validatorUrl
           );
 
-          // Extract actor address and save to config
-          const actorMatch = result.match(/Actor address:\s*([a-fA-F0-9]+)/);
+          // Extract actor address and auto-label from filename
+          const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
           if (actorMatch) {
-            const actorAddress = actorMatch[1];
+            const actorAddress = `0x${actorMatch[1]}`;
+            const filePath = args[0];
+            const fileName = basename(filePath, ".py");
+            const label = fileName === "main" ? basename(dirname(filePath)) : fileName;
             setSession((prev) => {
-              const actors = prev.actors.includes(actorAddress)
+              const exists = prev.actors.some((a) => a.address === actorAddress);
+              const actors = exists
                 ? prev.actors
-                : [...prev.actors, actorAddress];
-              saveConfig({ ...initialConfig, walletAddress: prev.walletAddress ?? undefined, actors });
+                : [...prev.actors, { address: actorAddress, label }];
+              saveActors(actors);
               return { ...prev, actors };
             });
           }
@@ -162,9 +167,43 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         if (session.actors.length === 0) {
           addMessage("output", "No actors deployed yet.");
         } else {
-          const list = session.actors.map((a, i) => `  ${i + 1}. ${a}`).join("\n");
+          const list = session.actors
+            .map((a, i) => {
+              const suffix = a.label ? `  ${a.label}` : "";
+              return `  ${i + 1}. ${a.address}${suffix}`;
+            })
+            .join("\n");
           addMessage("output", `Deployed actors:\n${list}`);
         }
+        return;
+      }
+
+      // actor label sets a label on an existing actor
+      if (command === "actor-label") {
+        const identifier = args[0];
+        const label = args.slice(1).join(" ");
+        const pos = Number(identifier);
+        let index = -1;
+
+        if (!isNaN(pos) && !identifier.startsWith("0x")) {
+          index = pos - 1;
+        } else {
+          index = session.actors.findIndex((a) => a.address === identifier);
+        }
+
+        if (index < 0 || index >= session.actors.length) {
+          addMessage("error", `Actor not found: ${identifier}`);
+          return;
+        }
+
+        setSession((prev) => {
+          const actors = prev.actors.map((a, i) =>
+            i === index ? { ...a, label } : a
+          );
+          saveActors(actors);
+          return { ...prev, actors };
+        });
+        addMessage("output", `Label set: ${session.actors[index].address}  ${label}`);
         return;
       }
 
@@ -175,17 +214,18 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           const cowboyArgs = commandToCowboyArgs(command, args);
           const result = await executeCowboy(cowboyArgs, session.validatorUrl);
 
-          // Extract wallet address and reload config (picks up new rpc_url)
-          const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
-          if (walletMatch) {
-            const walletAddress = walletMatch[1];
-            const freshConfig = loadConfig();
-            setSession((prev) => ({ ...prev, walletAddress, validatorUrl: freshConfig.validatorUrl }));
-            saveConfig({ ...freshConfig, walletAddress });
-          }
-
-          // Mark project as ready (init creates .cowboy/)
-          if (existsSync(join(process.cwd(), ".cowboy"))) {
+          // Re-read project config written by the CLI
+          const freshConfig = loadProjectConfig();
+          if (freshConfig) {
+            // CLI doesn't write wallet_address to config — extract from output
+            const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
+            setSession({
+              validatorUrl: freshConfig.validatorUrl,
+              walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
+              actors: freshConfig.actors,
+            });
+            setProjectReady(true);
+          } else if (existsSync(join(process.cwd(), ".cowboy"))) {
             setProjectReady(true);
           }
 
@@ -238,7 +278,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (!trimmed || isExecuting) return;
 
       setInput("");
-      setShowLogo(false);
+
       setHistory((prev) => [...prev, trimmed]);
       setHistoryIndex(-1);
 
@@ -296,7 +336,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   return (
     <Box flexDirection="column">
-      <Static items={showLogo ? [{ id: "header", type: "header" as const }, ...messages] : messages}>
+      <Static items={[{ id: "header", type: "header" as const }, ...messages]}>
         {(item) => {
           if ("type" in item && item.type === "header") {
             return <Header key="header" />;
