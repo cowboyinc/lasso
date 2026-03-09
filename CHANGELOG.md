@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+- Config uses `.cowboy/config.json` only (removed `~/.lasso/config.json` global config)
+- Actors stored per-environment in project config (`environments[active].actors`)
+- Init reloads full session state from project config instead of merging with stale global
+
+### Fixed
+- Actor deploy: address regex now handles `0x` prefix (was capturing just `"0"`)
+- Actor deploy: addresses stored with `0x` prefix for consistency
+- Init: clears stale actors from previous environment
+- Init: reads RPC URL from project config (`.cowboy/config.json`) instead of stale global config
+
+### Removed
+- `~/.lasso/config.json` global config file (single source of truth is now `.cowboy/config.json`)
+
 ### Added
 - Binary promotion workflow (`.github/workflows/promote.yml`)
   - Tag-based promotion from dev S3 to stg/prd S3 (`stg-v*`, `prd-v*`)
