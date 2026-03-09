@@ -94,7 +94,15 @@ export function parseCommand(input: string): CommandResult {
             };
           }
           const payload = flags.payload ?? "7b7d";
-          const args = ["--actor", actor, "--handler", handler, "--payload", payload];
+          const cyclesLimit = flags["cycles-limit"] ?? "500000";
+          const cellsLimit = flags["cells-limit"] ?? "500000";
+          const args = [
+            "--actor", actor,
+            "--handler", handler,
+            "--payload", payload,
+            "--cycles-limit", cyclesLimit,
+            "--cells-limit", cellsLimit,
+          ];
           return { type: "execute", command: "actor-execute", args };
         }
 
