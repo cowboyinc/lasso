@@ -6,6 +6,8 @@
 - Config uses `.cowboy/config.json` only (removed `~/.lasso/config.json` global config)
 - Actors stored per-environment in project config (`environments[active].actors`)
 - Init reloads full session state from project config instead of merging with stale global
+- `actor execute` accepts positional args: `actor execute <address> <method> [--payload <hex>]`
+- Default payload to empty JSON (`7b7d`) when not provided
 
 ### Fixed
 - Actor deploy: address regex now handles `0x` prefix (was capturing just `"0"`)
