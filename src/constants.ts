@@ -17,4 +17,6 @@ export const LOGO_TEXT = [
   "  Type deploy actor <file> to deploy an actor",
   "  Type help for all commands",
   "  Type exit to quit",
+  "",
+  "",
 ].join("\n");
