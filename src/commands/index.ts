@@ -25,6 +25,40 @@ function parseFlags(parts: string[]): {
   return { flags, positional };
 }
 
+/**
+ * Split a command string into tokens, respecting quoted strings.
+ * "watchtower new feed --name "BTC Price"" -> ["watchtower","new","feed","--name","BTC Price"]
+ */
+function tokenize(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inQuote = false;
+  let quoteChar = "";
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (inQuote) {
+      if (ch === quoteChar) {
+        inQuote = false;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      inQuote = true;
+      quoteChar = ch;
+    } else if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 export function parseCommand(input: string): CommandResult {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -33,7 +67,7 @@ export function parseCommand(input: string): CommandResult {
 
   // Normalize: strip leading / if user types it by habit
   const normalized = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-  const parts = normalized.split(/\s+/);
+  const parts = tokenize(normalized);
   const command = parts[0].toLowerCase();
 
   switch (command) {
