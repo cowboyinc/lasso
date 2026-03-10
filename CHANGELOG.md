@@ -8,6 +8,9 @@
 - `actor list` now shows labels next to addresses
 - Auto-migration: old `string[]` actor configs are upgraded to `{address, label}` format on load
 
+### Fixed
+- Command parser now respects quoted strings (e.g. `--name "BTC Price"` no longer splits into `"BTC` and `Price"`)
+
 ### Changed
 - `actor execute` default gas limits increased to 500K cycles/cells (was using CLI default 200K, insufficient for runner jobs)
 - Config uses `.cowboy/config.json` only (removed `~/.lasso/config.json` global config)
