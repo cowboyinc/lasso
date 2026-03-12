@@ -28,7 +28,6 @@ export interface EditorBuffer {
 export interface LineEditorProps extends EditorBuffer {
   onChange: (buffer: EditorBuffer) => void;
   onSubmit: (value: string) => void;
-  onInterrupt?: () => void;
   onCancel?: () => void;
   onHistoryUp?: () => void;
   onHistoryDown?: () => void;

@@ -22,7 +22,19 @@ interface InterruptState {
   pendingExit: boolean;
 }
 
+interface InterruptActionState {
+  inputValue: string;
+  pendingExit: boolean;
+  isExecuting: boolean;
+}
+
 const WORD_CHAR = /[A-Za-z0-9_]/;
+
+export type InterruptAction =
+  | "cancel-execution"
+  | "clear-input"
+  | "arm-exit"
+  | "exit";
 
 export function createEditorState(value = "", cursorOffset = value.length): EditorState {
   return {
@@ -88,6 +100,22 @@ export function getCursorColumn(state: EditorState, promptWidth: number): number
 
 export function shouldExitOnInterrupt({ value, pendingExit }: InterruptState): boolean {
   return value.length === 0 && pendingExit;
+}
+
+export function getInterruptAction({
+  inputValue,
+  pendingExit,
+  isExecuting,
+}: InterruptActionState): InterruptAction {
+  if (isExecuting) {
+    return "cancel-execution";
+  }
+
+  if (inputValue.length > 0) {
+    return "clear-input";
+  }
+
+  return pendingExit ? "exit" : "arm-exit";
 }
 
 export function resolveKeypressAction(

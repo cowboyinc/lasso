@@ -4,6 +4,7 @@ import {
   applyEditorAction,
   createEditorState,
   getCursorColumn,
+  getInterruptAction,
   resolveKeypressAction,
   shouldExitOnInterrupt,
 } from "./editor-state.js";
@@ -92,6 +93,32 @@ test("interrupt logic clears first and exits on second empty interrupt", () => {
   assert.equal(shouldExitOnInterrupt({ value: "hello", pendingExit: false }), false);
   assert.equal(shouldExitOnInterrupt({ value: "", pendingExit: false }), false);
   assert.equal(shouldExitOnInterrupt({ value: "", pendingExit: true }), true);
+});
+
+test("interrupt action cancels execution before any exit behavior", () => {
+  assert.equal(
+    getInterruptAction({ inputValue: "hello", pendingExit: false, isExecuting: true }),
+    "cancel-execution"
+  );
+  assert.equal(
+    getInterruptAction({ inputValue: "", pendingExit: true, isExecuting: true }),
+    "cancel-execution"
+  );
+});
+
+test("interrupt action preserves two-step exit flow while idle", () => {
+  assert.equal(
+    getInterruptAction({ inputValue: "hello", pendingExit: false, isExecuting: false }),
+    "clear-input"
+  );
+  assert.equal(
+    getInterruptAction({ inputValue: "", pendingExit: false, isExecuting: false }),
+    "arm-exit"
+  );
+  assert.equal(
+    getInterruptAction({ inputValue: "", pendingExit: true, isExecuting: false }),
+    "exit"
+  );
 });
 
 test("terminal delete key defaults to backward delete while ctrl+d stays forward delete", () => {

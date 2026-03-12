@@ -1,17 +1,17 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Box, Static, useApp } from "ink";
+import { Box, Static, useApp, useInput } from "ink";
 import { Header } from "./components/Header.js";
 import { Message } from "./components/Message.js";
 import { ThinkingSpinner } from "./components/ThinkingSpinner.js";
 import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
-import { deployActor, executeCowboy } from "./executor.js";
+import { startCowboyCommand, startDeployActor } from "./executor.js";
 import { loadProjectConfig, saveActors } from "./config.js";
 import { basename, dirname } from "node:path";
-import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
+import { createEditorState, getInterruptAction } from "./editor-state.js";
 import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
 
 interface AppProps {
@@ -96,6 +96,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
   const [isExecuting, setIsExecuting] = useState(false);
   const [pendingExit, setPendingExit] = useState(false);
+  const activeExecutionRef = useRef<null | { cancel: () => void }>(null);
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -124,10 +125,18 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (command === "deploy-actor") {
         setIsExecuting(true);
         try {
-          const result = await deployActor(args[0], session.validatorUrl);
+          const execution = startDeployActor(args[0], session.validatorUrl);
+          activeExecutionRef.current = execution;
+          const result = await execution.promise;
+          activeExecutionRef.current = null;
+
+          if (result.status === "interrupted") {
+            addMessage("system", "Command interrupted.");
+            return;
+          }
 
           // Extract actor address and auto-label from filename
-          const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
+          const actorMatch = result.output.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
           if (actorMatch) {
             const actorAddress = `0x${actorMatch[1]}`;
             const filePath = args[0];
@@ -144,10 +153,10 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           }
 
           // Truncate after the success line
-          const cutIdx = result.indexOf("Actor deployment transaction submitted successfully");
+          const cutIdx = result.output.indexOf("Actor deployment transaction submitted successfully");
           const trimmed = cutIdx !== -1
-            ? result.slice(0, cutIdx + "Actor deployment transaction submitted successfully".length).trim()
-            : result;
+            ? result.output.slice(0, cutIdx + "Actor deployment transaction submitted successfully".length).trim()
+            : result.output;
 
           addMessage("output", trimmed);
         } catch (err: unknown) {
@@ -156,6 +165,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             `Deploy failed: ${err instanceof Error ? err.message : String(err)}`
           );
         } finally {
+          activeExecutionRef.current = null;
           setIsExecuting(false);
         }
         return;
@@ -211,13 +221,21 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setIsExecuting(true);
         try {
           const cowboyArgs = commandToCowboyArgs(command, args);
-          const result = await executeCowboy(cowboyArgs, session.validatorUrl);
+          const execution = startCowboyCommand(cowboyArgs, session.validatorUrl);
+          activeExecutionRef.current = execution;
+          const result = await execution.promise;
+          activeExecutionRef.current = null;
+
+          if (result.status === "interrupted") {
+            addMessage("system", "Command interrupted.");
+            return;
+          }
 
           // Re-read project config written by the CLI
           const freshConfig = loadProjectConfig();
           if (freshConfig) {
             // CLI doesn't write wallet_address to config — extract from output
-            const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
+            const walletMatch = result.output.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
             setSession({
               validatorUrl: freshConfig.validatorUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
@@ -229,7 +247,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           }
 
           // Strip everything from "Next steps:" onward and replace
-          const cleaned = result.replace(/\n?\s*Next steps:[\s\S]*$/, "").trim();
+          const cleaned = result.output.replace(/\n?\s*Next steps:[\s\S]*$/, "").trim();
 
           const nextSteps = [
             "",
@@ -246,6 +264,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             `Init failed: ${err instanceof Error ? err.message : String(err)}`
           );
         } finally {
+          activeExecutionRef.current = null;
           setIsExecuting(false);
         }
         return;
@@ -254,17 +273,24 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       setIsExecuting(true);
       try {
         const cowboyArgs = commandToCowboyArgs(command, args);
-        const result = await executeCowboy(
-          cowboyArgs,
-          session.validatorUrl
-        );
-        addMessage("output", result);
+        const execution = startCowboyCommand(cowboyArgs, session.validatorUrl);
+        activeExecutionRef.current = execution;
+        const result = await execution.promise;
+        activeExecutionRef.current = null;
+
+        if (result.status === "interrupted") {
+          addMessage("system", "Command interrupted.");
+          return;
+        }
+
+        addMessage("output", result.output || "Command completed (no output)");
       } catch (err: unknown) {
         addMessage(
           "error",
           `Command failed: ${err instanceof Error ? err.message : String(err)}`
         );
       } finally {
+        activeExecutionRef.current = null;
         setIsExecuting(false);
       }
     },
@@ -346,15 +372,25 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   }, []);
 
   const handleInterrupt = useCallback(() => {
-    if (isExecuting) return;
+    const action = getInterruptAction({
+      inputValue: input.value,
+      pendingExit,
+      isExecuting,
+    });
 
-    if (input.value.length > 0) {
+    if (action === "cancel-execution") {
+      setPendingExit(false);
+      activeExecutionRef.current?.cancel();
+      return;
+    }
+
+    if (action === "clear-input") {
       setInput(createEditorState(""));
       setPendingExit(true);
       return;
     }
 
-    if (shouldExitOnInterrupt({ value: input.value, pendingExit })) {
+    if (action === "exit") {
       exit();
       return;
     }
@@ -362,6 +398,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     setPendingExit(true);
     addMessage("system", "Press Ctrl+C again to exit.");
   }, [addMessage, exit, input.value, isExecuting, pendingExit]);
+
+  useInput((value, key) => {
+    if (key.ctrl && value === "c") {
+      handleInterrupt();
+    }
+  });
 
   return (
     <Box flexDirection="column">
@@ -377,14 +419,13 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
       {isExecuting && <ThinkingSpinner />}
 
-      <InputArea
-        input={input}
-        onChange={handleInputChange}
-        onSubmit={handleSubmit}
-        onInterrupt={handleInterrupt}
-        onHistoryUp={handleHistoryUp}
-        onHistoryDown={handleHistoryDown}
-        onActivity={handleInputActivity}
+        <InputArea
+          input={input}
+          onChange={handleInputChange}
+          onSubmit={handleSubmit}
+          onHistoryUp={handleHistoryUp}
+          onHistoryDown={handleHistoryDown}
+          onActivity={handleInputActivity}
         isDisabled={isExecuting}
       />
 
