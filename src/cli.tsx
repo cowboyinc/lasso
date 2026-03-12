@@ -18,7 +18,7 @@ function main() {
 
   render(
     <App
-      initialConfig={config ?? { validatorUrl: "http://localhost:4000", walletAddress: null, actors: [] }}
+      initialConfig={config ?? { validatorUrl: "http://localhost:4000", walletAddress: null, actors: [], feeds: [] }}
       hasProject={hasProject}
     />,
     { exitOnCtrlC: false }
