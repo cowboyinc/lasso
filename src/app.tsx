@@ -11,7 +11,8 @@ import { parseCommand } from "./commands/index.js";
 import { deployActor, executeCowboy } from "./executor.js";
 import { loadProjectConfig, saveActors } from "./config.js";
 import { basename, dirname } from "node:path";
-import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState } from "./types.js";
+import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
+import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
 
 interface AppProps {
   initialConfig: ProjectConfig;
@@ -92,8 +93,9 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   });
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
   const [isExecuting, setIsExecuting] = useState(false);
+  const [pendingExit, setPendingExit] = useState(false);
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -122,10 +124,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (command === "deploy-actor") {
         setIsExecuting(true);
         try {
-          const result = await deployActor(
-            args[0],
-            session.validatorUrl
-          );
+          const result = await deployActor(args[0], session.validatorUrl);
 
           // Extract actor address and auto-label from filename
           const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
@@ -277,7 +276,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       const trimmed = value.trim();
       if (!trimmed || isExecuting) return;
 
-      setInput("");
+      setInput(createEditorState(""));
+      setPendingExit(false);
 
       setHistory((prev) => [...prev, trimmed]);
       setHistoryIndex(-1);
@@ -319,7 +319,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     if (history.length === 0) return;
     const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
     setHistoryIndex(newIndex);
-    setInput(history[newIndex]);
+    setPendingExit(false);
+    setInput(createEditorState(history[newIndex]));
   }, [history, historyIndex]);
 
   const handleHistoryDown = useCallback(() => {
@@ -327,12 +328,40 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     const newIndex = historyIndex + 1;
     if (newIndex >= history.length) {
       setHistoryIndex(-1);
-      setInput("");
+      setInput(createEditorState(""));
     } else {
       setHistoryIndex(newIndex);
-      setInput(history[newIndex]);
+      setInput(createEditorState(history[newIndex]));
     }
+    setPendingExit(false);
   }, [history, historyIndex]);
+
+  const handleInputChange = useCallback((nextInput: EditorBuffer) => {
+    setPendingExit(false);
+    setInput(nextInput);
+  }, []);
+
+  const handleInputActivity = useCallback(() => {
+    setPendingExit(false);
+  }, []);
+
+  const handleInterrupt = useCallback(() => {
+    if (isExecuting) return;
+
+    if (input.value.length > 0) {
+      setInput(createEditorState(""));
+      setPendingExit(true);
+      return;
+    }
+
+    if (shouldExitOnInterrupt({ value: input.value, pendingExit })) {
+      exit();
+      return;
+    }
+
+    setPendingExit(true);
+    addMessage("system", "Press Ctrl+C again to exit.");
+  }, [addMessage, exit, input.value, isExecuting, pendingExit]);
 
   return (
     <Box flexDirection="column">
@@ -349,11 +378,13 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       {isExecuting && <ThinkingSpinner />}
 
       <InputArea
-        value={input}
-        onChange={setInput}
+        input={input}
+        onChange={handleInputChange}
         onSubmit={handleSubmit}
+        onInterrupt={handleInterrupt}
         onHistoryUp={handleHistoryUp}
         onHistoryDown={handleHistoryDown}
+        onActivity={handleInputActivity}
         isDisabled={isExecuting}
       />
 
