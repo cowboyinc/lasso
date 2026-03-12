@@ -7,12 +7,20 @@ import { Message } from "./components/Message.js";
 import { ThinkingSpinner } from "./components/ThinkingSpinner.js";
 import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { CompletionCache, getCompletionResult } from "./commands/autocomplete.js";
 import { parseCommand } from "./commands/index.js";
 import { startCowboyCommand, startDeployActor } from "./executor.js";
-import { loadProjectConfig, saveActors } from "./config.js";
+import { loadProjectConfig, saveActors, saveFeeds } from "./config.js";
 import { basename, dirname } from "node:path";
-import { createEditorState, getInterruptAction } from "./editor-state.js";
-import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
+import {
+  acceptSuggestion,
+  createEditorState,
+  getInterruptAction,
+  matchesSuggestionContext,
+  moveSuggestionSelection,
+  openSuggestions,
+} from "./editor-state.js";
+import type { ActorEntry, FeedEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer, SuggestionMenu } from "./types.js";
 
 interface AppProps {
   initialConfig: ProjectConfig;
@@ -90,13 +98,16 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     validatorUrl: initialConfig.validatorUrl,
     walletAddress: initialConfig.walletAddress,
     actors: initialConfig.actors,
+    feeds: initialConfig.feeds,
   });
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
   const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
+  const [suggestions, setSuggestions] = useState<SuggestionMenu | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [pendingExit, setPendingExit] = useState(false);
   const activeExecutionRef = useRef<null | { cancel: () => void }>(null);
+  const completionCacheRef = useRef(new CompletionCache());
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -148,6 +159,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
                 ? prev.actors
                 : [...prev.actors, { address: actorAddress, label }];
               saveActors(actors);
+              completionCacheRef.current.invalidate("actor");
               return { ...prev, actors };
             });
           }
@@ -210,6 +222,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             i === index ? { ...a, label } : a
           );
           saveActors(actors);
+          completionCacheRef.current.invalidate("actor");
           return { ...prev, actors };
         });
         addMessage("output", `Label set: ${session.actors[index].address}  ${label}`);
@@ -240,7 +253,9 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               validatorUrl: freshConfig.validatorUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
               actors: freshConfig.actors,
+              feeds: freshConfig.feeds,
             });
+            completionCacheRef.current.invalidate();
             setProjectReady(true);
           } else if (existsSync(join(process.cwd(), ".cowboy"))) {
             setProjectReady(true);
@@ -283,6 +298,19 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           return;
         }
 
+        if (command === "watchtower-new-feed") {
+          const feed = extractFeedEntry(result.output, args);
+          if (feed) {
+            setSession((prev) => {
+              const exists = prev.feeds.some((entry) => entry.id === feed.id);
+              const feeds = exists ? prev.feeds : [...prev.feeds, feed];
+              saveFeeds(feeds);
+              completionCacheRef.current.invalidate("feed");
+              return { ...prev, feeds };
+            });
+          }
+        }
+
         addMessage("output", result.output || "Command completed (no output)");
       } catch (err: unknown) {
         addMessage(
@@ -303,6 +331,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (!trimmed || isExecuting) return;
 
       setInput(createEditorState(""));
+      setSuggestions(null);
       setPendingExit(false);
 
       setHistory((prev) => [...prev, trimmed]);
@@ -346,6 +375,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     const newIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
     setHistoryIndex(newIndex);
     setPendingExit(false);
+    setSuggestions(null);
     setInput(createEditorState(history[newIndex]));
   }, [history, historyIndex]);
 
@@ -354,9 +384,11 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     const newIndex = historyIndex + 1;
     if (newIndex >= history.length) {
       setHistoryIndex(-1);
+      setSuggestions(null);
       setInput(createEditorState(""));
     } else {
       setHistoryIndex(newIndex);
+      setSuggestions(null);
       setInput(createEditorState(history[newIndex]));
     }
     setPendingExit(false);
@@ -364,7 +396,64 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   const handleInputChange = useCallback((nextInput: EditorBuffer) => {
     setPendingExit(false);
+    setSuggestions(null);
     setInput(nextInput);
+  }, []);
+
+  const handleAutocomplete = useCallback(() => {
+    void (async () => {
+      const match = await getCompletionResult({
+        input: input.value,
+        cursorOffset: input.cursorOffset,
+        cwd: process.cwd(),
+        session,
+        cache: completionCacheRef.current,
+      });
+
+      if (!match) {
+        setSuggestions(null);
+        return;
+      }
+
+      if (suggestions && matchesSuggestionContext(suggestions, {
+        tokenStart: match.tokenStart,
+        tokenEnd: match.tokenEnd,
+        items: match.items,
+      }, input)) {
+        setSuggestions(moveSuggestionSelection(suggestions, 1));
+        return;
+      }
+
+      const result = openSuggestions(input, {
+        tokenStart: match.tokenStart,
+        tokenEnd: match.tokenEnd,
+        items: match.items,
+      });
+      setPendingExit(false);
+      setInput(result.nextState);
+      setSuggestions(result.menu);
+    })();
+  }, [input, session, suggestions]);
+
+  const handleSuggestionNext = useCallback(() => {
+    if (!suggestions) return;
+    setSuggestions(moveSuggestionSelection(suggestions, 1));
+  }, [suggestions]);
+
+  const handleSuggestionPrevious = useCallback(() => {
+    if (!suggestions) return;
+    setSuggestions(moveSuggestionSelection(suggestions, -1));
+  }, [suggestions]);
+
+  const handleSuggestionAccept = useCallback(() => {
+    if (!suggestions) return;
+    setInput(acceptSuggestion(input, suggestions));
+    setSuggestions(null);
+    setPendingExit(false);
+  }, [input, suggestions]);
+
+  const handleSuggestionDismiss = useCallback(() => {
+    setSuggestions(null);
   }, []);
 
   const handleInputActivity = useCallback(() => {
@@ -380,12 +469,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
     if (action === "cancel-execution") {
       setPendingExit(false);
+      setSuggestions(null);
       activeExecutionRef.current?.cancel();
       return;
     }
 
     if (action === "clear-input") {
       setInput(createEditorState(""));
+      setSuggestions(null);
       setPendingExit(true);
       return;
     }
@@ -423,10 +514,16 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           input={input}
           onChange={handleInputChange}
           onSubmit={handleSubmit}
+          onAutocomplete={handleAutocomplete}
+          onSuggestionNext={handleSuggestionNext}
+          onSuggestionPrevious={handleSuggestionPrevious}
+          onSuggestionAccept={handleSuggestionAccept}
+          onSuggestionDismiss={handleSuggestionDismiss}
           onHistoryUp={handleHistoryUp}
           onHistoryDown={handleHistoryDown}
           onActivity={handleInputActivity}
-        isDisabled={isExecuting}
+          suggestions={suggestions}
+          isDisabled={isExecuting}
       />
 
       <StatusBar
@@ -436,4 +533,17 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       />
     </Box>
   );
+}
+
+function extractFeedEntry(output: string, args: string[]): FeedEntry | null {
+  const idMatch = output.match(/Feed(?:\s+ID)?\s*:\s*([A-Za-z0-9._:-]+)/i);
+  if (!idMatch) {
+    return null;
+  }
+
+  const nameIndex = args.indexOf("--name");
+  return {
+    id: idMatch[1],
+    name: nameIndex >= 0 ? args[nameIndex + 1] : undefined,
+  };
 }
