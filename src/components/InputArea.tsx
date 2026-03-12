@@ -1,30 +1,30 @@
 import React from "react";
-import { Box, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
+import { Box, Text } from "ink";
 import { Separator } from "./Separator.js";
+import { LineEditor } from "./LineEditor.js";
+import type { EditorBuffer } from "../types.js";
 
 interface InputAreaProps {
-  value: string;
-  onChange: (value: string) => void;
+  input: EditorBuffer;
+  onChange: (buffer: EditorBuffer) => void;
   onSubmit: (value: string) => void;
+  onInterrupt?: () => void;
   onHistoryUp?: () => void;
   onHistoryDown?: () => void;
+  onActivity?: () => void;
   isDisabled?: boolean;
 }
 
 export function InputArea({
-  value,
+  input,
   onChange,
   onSubmit,
+  onInterrupt,
   onHistoryUp,
   onHistoryDown,
+  onActivity,
   isDisabled,
 }: InputAreaProps) {
-  useInput((_input, key) => {
-    if (isDisabled) return;
-    if (key.upArrow && onHistoryUp) onHistoryUp();
-    if (key.downArrow && onHistoryDown) onHistoryDown();
-  });
   return (
     <Box flexDirection="column">
       <Separator />
@@ -34,10 +34,15 @@ export function InputArea({
         ) : (
           <Box>
             <Text color="green">{"\u276F "}</Text>
-            <TextInput
-              value={value}
+            <LineEditor
+              value={input.value}
+              cursorOffset={input.cursorOffset}
               onChange={onChange}
               onSubmit={onSubmit}
+              onInterrupt={onInterrupt}
+              onHistoryUp={onHistoryUp}
+              onHistoryDown={onHistoryDown}
+              onActivity={onActivity}
               placeholder="Type a command..."
             />
           </Box>

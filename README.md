@@ -69,6 +69,26 @@ Lasso runs as a persistent terminal session built with [Ink](https://github.com/
 
 The status bar at the bottom shows the current network, project status, and wallet address.
 
+## Keyboard Shortcuts
+
+Lasso now uses a shared line editor for the command prompt and masked inputs.
+
+- `Ctrl+A` / `Ctrl+E` move to the start or end of the line
+- `Ctrl+B` / `Ctrl+F` or left/right arrows move one character
+- `Alt+B` / `Alt+F` move by word when your terminal sends Meta/Option sequences
+- `Ctrl+H` or Backspace deletes backward
+- `Ctrl+D` or Delete deletes forward
+- `Ctrl+U` clears from the cursor back to the start of the line
+- `Ctrl+K` clears from the cursor to the end of the line
+- `Ctrl+W` deletes the previous word
+- Up/down arrows navigate command history in the main prompt
+- `Ctrl+C` clears the line first; pressing it again on an empty prompt exits Lasso
+
+macOS caveats:
+
+- `Option` shortcuts depend on your terminal being configured to send Meta/Escape sequences. Terminal.app and iTerm2 may need an explicit Option-as-Meta setting for `Alt+B` / `Alt+F` to work.
+- `Command` shortcuts are best-effort only. Most terminals keep `Command+Arrow` and similar combinations for local UI actions, so Lasso may never receive those key events.
+
 ## Configuration
 
 Config is stored at `~/.lasso/config.json` and includes:
