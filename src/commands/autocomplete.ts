@@ -379,8 +379,14 @@ async function pathProvider(request: ProviderRequest): Promise<CompletionItem[]>
   if (cached) return cached;
 
   const inputPath = prefix || "";
-  const baseDir = inputPath.includes("/") ? dirname(inputPath) : ".";
-  const fragment = inputPath.includes("/") ? basename(inputPath) : inputPath;
+  const endsInSeparator = inputPath.endsWith("/");
+  const hasDirectorySegments = inputPath.includes("/");
+  const baseDir = endsInSeparator
+    ? inputPath.slice(0, -1) || "."
+    : hasDirectorySegments
+      ? dirname(inputPath)
+      : ".";
+  const fragment = endsInSeparator ? "" : hasDirectorySegments ? basename(inputPath) : inputPath;
   const absoluteBaseDir = normalize(join(request.cwd, baseDir));
 
   let entries: string[] = [];

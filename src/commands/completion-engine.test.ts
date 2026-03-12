@@ -100,6 +100,28 @@ test("returns directory path candidates with a trailing slash", async () => {
   assert.equal(result?.items[0]?.detail, "directory");
 });
 
+test("returns path candidates from within a completed subdirectory", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "lasso-complete-subdir-"));
+  mkdirSync(join(cwd, "actors"));
+  mkdirSync(join(cwd, "actors", "nested"));
+  writeFileSync(join(cwd, "actors", "nested", "main.py"), "");
+  writeFileSync(join(cwd, "actors", "nested", "helper.py"), "");
+
+  const result = await getCompletionResult({
+    input: "actor deploy actors/nested/",
+    cursorOffset: 27,
+    cwd,
+    session: createSession(),
+    cache: new CompletionCache(),
+  });
+
+  assert.deepEqual(result?.items.map((item) => item.value), [
+    "actors/nested/helper.py",
+    "actors/nested/main.py",
+  ]);
+  assert.equal(result?.items[0]?.kind, "path");
+});
+
 test("returns actor candidates from tracked session state", async () => {
   const result = await getCompletionResult({
     input: "actor execute ",
