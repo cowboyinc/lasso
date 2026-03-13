@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
+const DEFAULT_INTERRUPT_TERM_MS = 2_000;
+const DEFAULT_INTERRUPT_KILL_MS = 5_000;
+const INTERRUPTION_WARNING =
+  "Interrupt requested, but the command exited normally and may have completed:";
+
 export interface CommandResult {
   status: "completed" | "interrupted";
   output: string;
@@ -12,13 +17,45 @@ export interface RunningCommand {
   cancel: () => void;
 }
 
-export function startCommand(command: string, args: string[]): RunningCommand {
+interface StartCommandOptions {
+  interruptTermMs?: number;
+  interruptKillMs?: number;
+}
+
+function signalExitCode(signal: NodeJS.Signals): number {
+  switch (signal) {
+    case "SIGINT":
+      return 130;
+    case "SIGTERM":
+      return 143;
+    case "SIGKILL":
+      return 137;
+    default:
+      return 1;
+  }
+}
+
+export function startCommand(
+  command: string,
+  args: string[],
+  options: StartCommandOptions = {}
+): RunningCommand {
   const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-  let interrupted = false;
+  let interruptRequested = false;
   let settled = false;
+  let termTimer: NodeJS.Timeout | undefined;
+  let killTimer: NodeJS.Timeout | undefined;
+  const interruptTermMs = options.interruptTermMs ?? DEFAULT_INTERRUPT_TERM_MS;
+  const interruptKillMs = options.interruptKillMs ?? DEFAULT_INTERRUPT_KILL_MS;
+
+  function clearInterruptTimers(): void {
+    if (termTimer) clearTimeout(termTimer);
+    if (killTimer) clearTimeout(killTimer);
+    termTimer = undefined;
+    killTimer = undefined;
+  }
 
   const promise = new Promise<CommandResult>((resolve, reject) => {
-
     let stdout = "";
     let stderr = "";
 
@@ -30,20 +67,29 @@ export function startCommand(command: string, args: string[]): RunningCommand {
       stderr += data.toString();
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (settled) return;
       settled = true;
+      clearInterruptTimers();
+      const interrupted = interruptRequested && signal !== null;
+      const output = `${stdout}${stderr}`.trim();
+      const warnedOutput = interruptRequested && !interrupted && output
+        ? `${INTERRUPTION_WARNING}\n${output}`
+        : interruptRequested && !interrupted
+          ? INTERRUPTION_WARNING
+          : output;
 
       resolve({
         status: interrupted ? "interrupted" : "completed",
-        output: interrupted ? "" : `${stdout}${stderr}`.trim(),
-        exitCode: code ?? (interrupted ? 130 : 1),
+        output: interrupted ? "" : warnedOutput,
+        exitCode: code ?? (signal ? signalExitCode(signal) : 1),
       });
     });
 
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
+      clearInterruptTimers();
       reject(err);
     });
   });
@@ -51,9 +97,15 @@ export function startCommand(command: string, args: string[]): RunningCommand {
   return {
     promise,
     cancel: () => {
-      if (settled || interrupted) return;
-      interrupted = true;
-      child.kill("SIGINT"); setTimeout(() => child.kill("SIGKILL"), 5000);
+      if (settled || interruptRequested) return;
+      interruptRequested = true;
+      child.kill("SIGINT");
+      termTimer = setTimeout(() => {
+        if (!settled) child.kill("SIGTERM");
+      }, interruptTermMs);
+      killTimer = setTimeout(() => {
+        if (!settled) child.kill("SIGKILL");
+      }, interruptKillMs);
     },
   };
 }
