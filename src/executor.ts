@@ -53,7 +53,7 @@ export function startCommand(command: string, args: string[]): RunningCommand {
     cancel: () => {
       if (settled || interrupted) return;
       interrupted = true;
-      child.kill("SIGINT");
+      child.kill("SIGINT"); setTimeout(() => child.kill("SIGKILL"), 5000);
     },
   };
 }
