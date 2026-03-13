@@ -1,5 +1,5 @@
-import { readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, normalize } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FeedEntry } from "../../types.js";
 import type { CompletionContext, CompletionItem, ProviderRequest } from "./types.js";
 
@@ -68,7 +68,26 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
       ? dirname(inputPath)
       : ".";
   const fragment = endsInSeparator ? "" : hasDirectorySegments ? basename(inputPath) : inputPath;
-  const absoluteBaseDir = normalize(join(request.cwd, baseDir));
+  if (isAbsolute(inputPath)) {
+    request.cache.set(cacheKey, []);
+    return [];
+  }
+
+  let absoluteCwd: string;
+  let absoluteBaseDir: string;
+  try {
+    absoluteCwd = realpathSync(request.cwd);
+    absoluteBaseDir = realpathSync(resolve(absoluteCwd, baseDir));
+  } catch {
+    request.cache.set(cacheKey, []);
+    return [];
+  }
+
+  const relativeBaseDir = relative(absoluteCwd, absoluteBaseDir);
+  if (relativeBaseDir === ".." || relativeBaseDir.startsWith(`..${sep}`) || isAbsolute(relativeBaseDir)) {
+    request.cache.set(cacheKey, []);
+    return [];
+  }
 
   let entries: string[] = [];
   try {
@@ -78,19 +97,25 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
     return [];
   }
 
-  const items = entries
-    .filter((entry) => entry.startsWith(fragment))
-    .map((entry) => {
+  const items = entries.flatMap((entry) => {
+    if (!entry.startsWith(fragment)) {
+      return [];
+    }
+
+    try {
       const relativePath = baseDir === "." ? entry : `${baseDir}/${entry}`;
       const isDirectory = statSync(join(absoluteBaseDir, entry)).isDirectory();
       const value = isDirectory ? `${relativePath}/` : relativePath;
-      return {
+      return [{
         value,
         label: value,
         detail: isDirectory ? "directory" : undefined,
         kind: "path" as const,
-      };
-    })
+      }];
+    } catch {
+      return [];
+    }
+  })
     .sort((left, right) => left.value.localeCompare(right.value));
 
   request.cache.set(cacheKey, items);
