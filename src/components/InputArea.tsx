@@ -8,7 +8,6 @@ interface InputAreaProps {
   input: EditorBuffer;
   onChange: (buffer: EditorBuffer) => void;
   onSubmit: (value: string) => void;
-  onInterrupt?: () => void;
   onHistoryUp?: () => void;
   onHistoryDown?: () => void;
   onActivity?: () => void;
@@ -19,7 +18,6 @@ export function InputArea({
   input,
   onChange,
   onSubmit,
-  onInterrupt,
   onHistoryUp,
   onHistoryDown,
   onActivity,
@@ -39,7 +37,6 @@ export function InputArea({
               cursorOffset={input.cursorOffset}
               onChange={onChange}
               onSubmit={onSubmit}
-              onInterrupt={onInterrupt}
               onHistoryUp={onHistoryUp}
               onHistoryDown={onHistoryDown}
               onActivity={onActivity}

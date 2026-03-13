@@ -8,7 +8,6 @@ export function LineEditor({
   cursorOffset,
   onChange,
   onSubmit,
-  onInterrupt,
   onCancel,
   onHistoryUp,
   onHistoryDown,
@@ -37,11 +36,6 @@ export function LineEditor({
       if (isDisabled) return;
 
       const { input, key, sequence } = parseInput(data);
-
-      if (key.ctrl && input === "c") {
-        onInterrupt?.();
-        return;
-      }
 
       if (key.return || input === "\r" || input === "\n") {
         onSubmit(value);
@@ -97,7 +91,6 @@ export function LineEditor({
     onChange,
     onHistoryDown,
     onHistoryUp,
-    onInterrupt,
     onSubmit,
     value,
   ]);
