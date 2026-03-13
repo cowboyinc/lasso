@@ -1,4 +1,5 @@
 import React from "react";
+import { stripVTControlCharacters } from "node:util";
 import { Box, Text } from "ink";
 import type { SuggestionMenu } from "../types.js";
 
@@ -7,7 +8,7 @@ interface SuggestionListProps {
 }
 
 function sanitizeTerminalText(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, "");
+  return stripVTControlCharacters(value).replace(/[\u0000-\u001f\u007f]/g, "");
 }
 
 export function SuggestionList({ menu }: SuggestionListProps) {

@@ -27,6 +27,6 @@ test("suggestion labels strip terminal control sequences before rendering", () =
 
   assert.equal(output.includes("\u001b"), false);
   assert.equal(output.includes("\u0007"), false);
-  assert.equal(output.includes("actors/]52;c;Zm9vmain.py"), true);
-  assert.equal(output.includes("dir[31m"), true);
+  assert.equal(output.includes("actors/main.py"), true);
+  assert.equal(output.includes("dir"), true);
 });
