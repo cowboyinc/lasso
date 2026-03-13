@@ -1,6 +1,15 @@
+import type { CompletionItem } from "./commands/autocomplete.js";
+import type { SuggestionMenu } from "./types.js";
+
 export interface EditorState {
   value: string;
   cursorOffset: number;
+}
+
+export interface AutocompleteMatch {
+  tokenStart: number;
+  tokenEnd: number;
+  items: CompletionItem[];
 }
 
 export type EditorAction =
@@ -35,6 +44,11 @@ export type InterruptAction =
   | "clear-input"
   | "arm-exit"
   | "exit";
+
+export interface SuggestionResult {
+  nextState: EditorState;
+  menu: SuggestionMenu | null;
+}
 
 export function createEditorState(value = "", cursorOffset = value.length): EditorState {
   return {
@@ -116,6 +130,76 @@ export function getInterruptAction({
   }
 
   return pendingExit ? "exit" : "arm-exit";
+}
+
+export function openSuggestions(
+  state: EditorState,
+  match: AutocompleteMatch
+): SuggestionResult {
+  const query = state.value.slice(match.tokenStart, state.cursorOffset);
+  if (match.items.length === 1) {
+    const replacement = match.items[0];
+    const insertion = formatCompletionInsertion(replacement);
+    return {
+      nextState: replaceToken(state, match, insertion.value, insertion.appendSpace),
+      menu: null,
+    };
+  }
+
+  return {
+    nextState: state,
+    menu: {
+      isOpen: true,
+      tokenStart: match.tokenStart,
+      tokenEnd: match.tokenEnd,
+      query,
+      candidates: match.items,
+      activeIndex: 0,
+    },
+  };
+}
+
+export function moveSuggestionSelection(
+  menu: SuggestionMenu,
+  delta: number
+): SuggestionMenu {
+  const nextIndex = (menu.activeIndex + delta + menu.candidates.length) % menu.candidates.length;
+  return {
+    ...menu,
+    activeIndex: nextIndex,
+  };
+}
+
+export function acceptSuggestion(
+  state: EditorState,
+  menu: SuggestionMenu
+): EditorState {
+  const replacement = menu.candidates[menu.activeIndex];
+  const insertion = formatCompletionInsertion(replacement);
+  return replaceToken(state, {
+    tokenStart: menu.tokenStart,
+    tokenEnd: menu.tokenEnd,
+    items: menu.candidates,
+  }, insertion.value, insertion.appendSpace);
+}
+
+export function matchesSuggestionContext(
+  menu: SuggestionMenu | null,
+  match: AutocompleteMatch,
+  state: EditorState
+): boolean {
+  if (!menu) {
+    return false;
+  }
+
+  const query = state.value.slice(match.tokenStart, state.cursorOffset);
+  return (
+    menu.isOpen &&
+    menu.tokenStart === match.tokenStart &&
+    menu.tokenEnd === match.tokenEnd &&
+    menu.query === query &&
+    sameCandidates(menu.candidates, match.items)
+  );
 }
 
 export function resolveKeypressAction(
@@ -210,6 +294,56 @@ function insertText(state: EditorState, text: string): EditorState {
     value: state.value.slice(0, state.cursorOffset) + text + state.value.slice(state.cursorOffset),
     cursorOffset: state.cursorOffset + text.length,
   };
+}
+
+function replaceToken(
+  state: EditorState,
+  match: AutocompleteMatch,
+  replacement: string,
+  appendSpace: boolean
+): EditorState {
+  const hasExistingWhitespace = hasWhitespaceAt(state.value, match.tokenEnd);
+  const needsTrailingSpace = appendSpace && !hasExistingWhitespace;
+  const inserted = needsTrailingSpace ? `${replacement} ` : replacement;
+  const preservedWhitespaceOffset = appendSpace && hasExistingWhitespace && (
+    state.cursorOffset > match.tokenEnd ||
+    (state.cursorOffset === match.tokenEnd && match.tokenStart === match.tokenEnd)
+  )
+    ? 1
+    : 0;
+
+  return {
+    value: state.value.slice(0, match.tokenStart) + inserted + state.value.slice(match.tokenEnd),
+    cursorOffset: match.tokenStart + inserted.length + preservedWhitespaceOffset,
+  };
+}
+
+function formatCompletionInsertion(item: CompletionItem): { value: string; appendSpace: boolean } {
+  if (item.kind !== "path") {
+    return { value: item.value, appendSpace: true };
+  }
+
+  const value = /\s/.test(item.value) ? `"${item.value}"` : item.value;
+  return {
+    value,
+    appendSpace: !item.value.endsWith("/"),
+  };
+}
+
+function hasWhitespaceAt(value: string, index: number): boolean {
+  if (index >= value.length) {
+    return false;
+  }
+
+  return /\s/.test(value[index] ?? "");
+}
+
+function sameCandidates(left: CompletionItem[], right: CompletionItem[]): boolean {
+  return left.length === right.length && left.every((candidate, index) =>
+    candidate.kind === right[index]?.kind &&
+    candidate.value === right[index]?.value &&
+    candidate.label === right[index]?.label
+  );
 }
 
 function clampCursor(cursorOffset: number, value: string): number {

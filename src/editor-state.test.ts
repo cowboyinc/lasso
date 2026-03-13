@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyEditorAction,
+  acceptSuggestion,
   createEditorState,
   getCursorColumn,
   getInterruptAction,
+  moveSuggestionSelection,
+  openSuggestions,
   resolveKeypressAction,
   shouldExitOnInterrupt,
 } from "./editor-state.js";
@@ -166,4 +169,127 @@ test("terminal delete key defaults to backward delete while ctrl+d stays forward
     }, "\x1b[3~"),
     { type: "deleteForward" }
   );
+});
+
+test("single-match autocomplete inserts immediately and does not open a menu", () => {
+  const state = createEditorState("he");
+  const result = openSuggestions(state, {
+    tokenStart: 0,
+    tokenEnd: 2,
+    items: [{ value: "help", label: "help", kind: "command" }],
+  });
+
+  assert.equal(result.menu, null);
+  assert.equal(result.nextState.value, "help ");
+  assert.equal(result.nextState.cursorOffset, 5);
+});
+
+test("first tab on multiple matches opens a suggestion menu without mutating input", () => {
+  const state = createEditorState("actor ");
+  const result = openSuggestions(state, {
+    tokenStart: 6,
+    tokenEnd: 6,
+    items: [
+      { value: "deploy", label: "deploy", kind: "command" },
+      { value: "execute", label: "execute", kind: "command" },
+      { value: "get", label: "get", kind: "command" },
+    ],
+  });
+
+  assert.equal(result.nextState.value, "actor ");
+  assert.equal(result.nextState.cursorOffset, 6);
+  assert.deepEqual(result.menu, {
+    isOpen: true,
+    tokenStart: 6,
+    tokenEnd: 6,
+    query: "",
+    candidates: [
+      { value: "deploy", label: "deploy", kind: "command" },
+      { value: "execute", label: "execute", kind: "command" },
+      { value: "get", label: "get", kind: "command" },
+    ],
+    activeIndex: 0,
+  });
+});
+
+test("tab and arrow navigation both cycle the active suggestion and wrap", () => {
+  const state = createEditorState("actor ");
+  const first = openSuggestions(state, {
+    tokenStart: 6,
+    tokenEnd: 6,
+    items: [
+      { value: "deploy", label: "deploy", kind: "command" },
+      { value: "execute", label: "execute", kind: "command" },
+      { value: "get", label: "get", kind: "command" },
+    ],
+  });
+
+  const second = moveSuggestionSelection(first.menu!, 1);
+  assert.equal(second.activeIndex, 1);
+
+  const third = moveSuggestionSelection(second, 1);
+  assert.equal(third.activeIndex, 2);
+
+  const fourth = moveSuggestionSelection(third, 1);
+  assert.equal(fourth.activeIndex, 0);
+
+  const fifth = moveSuggestionSelection(fourth, -1);
+  assert.equal(fifth.activeIndex, 2);
+});
+
+test("accepting an open suggestion inserts it into the prompt and closes the menu", () => {
+  const state = createEditorState("actor ");
+  const opened = openSuggestions(state, {
+    tokenStart: 6,
+    tokenEnd: 6,
+    items: [
+      { value: "deploy", label: "deploy", kind: "command" },
+      { value: "execute", label: "execute", kind: "command" },
+      { value: "get", label: "get", kind: "command" },
+    ],
+  });
+
+  const moved = moveSuggestionSelection(opened.menu!, 1);
+  const accepted = acceptSuggestion(state, moved);
+
+  assert.equal(accepted.value, "actor execute ");
+  assert.equal(accepted.cursorOffset, 14);
+});
+
+test("accepting a suggestion preserves text after the cursor for mid-line completion", () => {
+  const state = createEditorState("actor  --address 0x123", 6);
+  const opened = openSuggestions(state, {
+    tokenStart: 6,
+    tokenEnd: 6,
+    items: [{ value: "deploy", label: "deploy", kind: "command" }],
+  });
+
+  assert.equal(opened.nextState.value, "actor deploy --address 0x123");
+  assert.equal(opened.nextState.cursorOffset, 13);
+});
+
+test("single-match file path completions quote spaces before inserting", () => {
+  const state = createEditorState("actor deploy actors/h");
+  const result = openSuggestions(state, {
+    tokenStart: 13,
+    tokenEnd: 21,
+    items: [{ value: "actors/hello world.py", label: "actors/hello world.py", kind: "path" }],
+  });
+
+  assert.equal(result.menu, null);
+  assert.equal(result.nextState.value, 'actor deploy "actors/hello world.py" ');
+  assert.equal(result.nextState.cursorOffset, 37);
+});
+
+test("single-match directory completions keep path traversal open", () => {
+  const state = createEditorState("actor deploy actors/n");
+  const result = openSuggestions(state, {
+    tokenStart: 13,
+    tokenEnd: 21,
+    items: [{ value: "actors/nested/", label: "actors/nested/", kind: "path", detail: "directory" }],
+  });
+
+  assert.equal(result.menu, null);
+  assert.equal(result.nextState.value, "actor deploy actors/nested/");
+  assert.equal(result.nextState.cursorOffset, 27);
 });

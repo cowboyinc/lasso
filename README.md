@@ -81,6 +81,9 @@ Lasso now uses a shared line editor for the command prompt and masked inputs.
 - `Ctrl+U` clears from the cursor back to the start of the line
 - `Ctrl+K` clears from the cursor to the end of the line
 - `Ctrl+W` deletes the previous word
+- `Tab` opens command suggestions and cycles the highlighted match
+- Up/down arrows navigate the suggestion list when it is open
+- `Enter` inserts the highlighted suggestion without running the command
 - Up/down arrows navigate command history in the main prompt
 - `Ctrl+C` clears the line first; pressing it again on an empty prompt exits Lasso
 

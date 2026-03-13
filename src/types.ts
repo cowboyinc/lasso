@@ -3,16 +3,23 @@ export interface ActorEntry {
   label: string;
 }
 
+export interface FeedEntry {
+  id: string;
+  name?: string;
+}
+
 export interface ProjectConfig {
   validatorUrl: string;
   walletAddress: string | null;
   actors: ActorEntry[];
+  feeds: FeedEntry[];
 }
 
 export interface SessionState {
   validatorUrl: string;
   walletAddress: string | null;
   actors: ActorEntry[];
+  feeds: FeedEntry[];
 }
 
 export interface ConsoleMessage {
@@ -25,16 +32,31 @@ export interface EditorBuffer {
   cursorOffset: number;
 }
 
+export interface SuggestionMenu {
+  isOpen: true;
+  tokenStart: number;
+  tokenEnd: number;
+  query: string;
+  candidates: import("./commands/autocomplete.js").CompletionItem[];
+  activeIndex: number;
+}
+
 export interface LineEditorProps extends EditorBuffer {
   onChange: (buffer: EditorBuffer) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
+  onAutocomplete?: () => void;
+  onSuggestionNext?: () => void;
+  onSuggestionPrevious?: () => void;
+  onSuggestionAccept?: () => void;
+  onSuggestionDismiss?: () => void;
   onHistoryUp?: () => void;
   onHistoryDown?: () => void;
   onActivity?: () => void;
   placeholder?: string;
   mask?: string;
   isDisabled?: boolean;
+  hasOpenSuggestions?: boolean;
 }
 
 export type CommandResult =
