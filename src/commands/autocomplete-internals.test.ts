@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tokenizeWithSpans, findTokenAtCursor } from "./autocomplete/parser.js";
 import { getSpecCursorState } from "./autocomplete/matcher.js";
 import { pathProvider } from "./autocomplete/providers.js";
@@ -71,5 +71,47 @@ test("pathProvider returns directory entries with directory suffixes", async () 
   assert.deepEqual(items, [
     { value: "actors/hello.py", label: "actors/hello.py", detail: undefined, kind: "path" },
     { value: "actors/nested/", label: "actors/nested/", detail: "directory", kind: "path" },
+  ]);
+});
+
+test("pathProvider prevents traversal outside the cwd", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "lasso-provider-traversal-"));
+  writeFileSync(join(dirname(cwd), "secret.txt"), "");
+
+  const items = await pathProvider({
+    prefix: "../",
+    cwd,
+    session: {
+      validatorUrl: "http://localhost:4000",
+      walletAddress: null,
+      actors: [],
+      feeds: [],
+    },
+    cache: new CompletionCache(),
+  });
+
+  assert.deepEqual(items, []);
+});
+
+test("pathProvider skips entries that disappear during metadata lookup", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "lasso-provider-race-"));
+  mkdirSync(join(cwd, "actors"));
+  writeFileSync(join(cwd, "actors", "good.txt"), "");
+  symlinkSync("/nonexistent-target", join(cwd, "actors", "broken"));
+
+  const items = await pathProvider({
+    prefix: "actors/",
+    cwd,
+    session: {
+      validatorUrl: "http://localhost:4000",
+      walletAddress: null,
+      actors: [],
+      feeds: [],
+    },
+    cache: new CompletionCache(),
+  });
+
+  assert.deepEqual(items, [
+    { value: "actors/good.txt", label: "actors/good.txt", detail: undefined, kind: "path" },
   ]);
 });
