@@ -7,3 +7,4 @@ build/
 .cowboy/
 actors/
 cowboy.toml
+lasso

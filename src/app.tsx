@@ -8,7 +8,8 @@ import { ThinkingSpinner } from "./components/ThinkingSpinner.js";
 import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
-import { deployActor, executeCowboy, getCowboyVersion } from "./executor.js";
+import { deployActor, executeCowboy, getCowboyVersion, fetchMyActors, fetchActorDetail, detectWalletAddress } from "./executor.js";
+import type { ActorInfo } from "./executor.js";
 import { loadProjectConfig, saveActors } from "./config.js";
 import { basename, dirname } from "node:path";
 import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
@@ -21,8 +22,12 @@ function sanitize(s: string): string {
   return s.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 }
 
+function shortAddr(addr: string): string {
+  const hex = addr.startsWith("0x") ? addr : `0x${addr}`;
+  return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
+}
+
 function formatTokenList(raw: string): string {
-  // Strip WARN/INFO lines from cowboy CLI output
   const cleaned = raw.replace(/^.*?(WARN|INFO).*$/gm, "").trim();
 
   try {
@@ -36,17 +41,11 @@ function formatTokenList(raw: string): string {
       return isNaN(n) ? String(v) : n.toLocaleString("en-US");
     };
 
-    const shortAddr = (addr: string) => {
-      const hex = addr.startsWith("0x") ? addr : `0x${addr}`;
-      return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
-    };
-
     const shortId = (id: string) => {
       const hex = id.startsWith("0x") ? id : `0x${id}`;
       return `${hex.slice(0, 10)}...${hex.slice(-4)}`;
     };
 
-    // Table header
     const hdr = [
       "Name".padEnd(20),
       "Symbol".padEnd(8),
@@ -78,9 +77,77 @@ function formatTokenList(raw: string): string {
       ...rows.map((r) => `  ${r}`),
     ].join("\n");
   } catch {
-    // If JSON parse fails, return raw output
     return cleaned;
   }
+}
+
+function formatActorList(actors: ActorInfo[], localActors: ActorEntry[]): string {
+  if (actors.length === 0) {
+    return "No actors found for this wallet.";
+  }
+
+  const labelMap = new Map<string, string>();
+  for (const a of localActors) {
+    labelMap.set(a.address.toLowerCase(), a.label);
+  }
+
+  const hdr = [
+    "#".padEnd(4),
+    "Label".padEnd(20),
+    "Address".padEnd(44),
+    "Balance".padStart(12),
+    "Nonce".padStart(7),
+    "Storage".padStart(9),
+    "Deployed".padStart(10),
+  ].join("  ");
+
+  const sep = "-".repeat(hdr.length);
+
+  const rows = actors.map((a, i) => {
+    const fullAddr = a.address.startsWith("0x") ? a.address : `0x${a.address}`;
+    const label = (labelMap.get(fullAddr.toLowerCase()) || labelMap.get(a.address.toLowerCase()) || "").slice(0, 20).padEnd(20);
+    const num = String(i + 1).padEnd(4);
+    const addr = fullAddr.padEnd(44);
+    const balance = a.balance.toLocaleString("en-US").padStart(12);
+    const nonce = String(a.nonce).padStart(7);
+    const storage = (a.storage_size != null ? String(a.storage_size) : "-").padStart(9);
+    const deployed = (a.deploy_height != null ? `#${a.deploy_height}` : "-").padStart(10);
+    return [num, label, addr, balance, nonce, storage, deployed].join("  ");
+  });
+
+  return [
+    `  My actors (${actors.length})`,
+    "",
+    `  ${hdr}`,
+    `  ${sep}`,
+    ...rows.map((r) => `  ${r}`),
+  ].join("\n");
+}
+
+function formatLocalActorList(actors: ActorEntry[]): string {
+  const hdr = [
+    "#".padEnd(4),
+    "Label".padEnd(20),
+    "Address".padEnd(44),
+  ].join("  ");
+
+  const sep = "-".repeat(hdr.length);
+
+  const rows = actors.map((a, i) => {
+    const num = String(i + 1).padEnd(4);
+    const label = (a.label || "").slice(0, 20).padEnd(20);
+    const addr = a.address.padEnd(44);
+    return [num, label, addr].join("  ");
+  });
+
+  return [
+    `  My actors (${actors.length}) - local only`,
+    "  Set dashboard_url in .cowboy/config.json for live data",
+    "",
+    `  ${hdr}`,
+    `  ${sep}`,
+    ...rows.map((r) => `  ${r}`),
+  ].join("\n");
 }
 
 interface AppProps {
@@ -157,6 +224,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [projectReady, setProjectReady] = useState(initialHasProject);
   const [session, setSession] = useState<SessionState>({
     validatorUrl: initialConfig.validatorUrl,
+    dashboardUrl: initialConfig.dashboardUrl,
     walletAddress: initialConfig.walletAddress,
     actors: initialConfig.actors,
   });
@@ -193,6 +261,17 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   useEffect(() => {
     getCowboyVersion().then(setCowboyVersion);
   }, []);
+
+  // Auto-detect wallet address from key file if not set
+  useEffect(() => {
+    if (projectReady && !session.walletAddress) {
+      detectWalletAddress().then((addr) => {
+        if (addr) {
+          setSession((prev) => ({ ...prev, walletAddress: addr }));
+        }
+      });
+    }
+  }, [projectReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const executeCommand = useCallback(
     async (command: string, args: string[]) => {
@@ -237,18 +316,58 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         return;
       }
 
-      // actor list is lasso-only (not a cowboy CLI command)
+      // actor get — fetch from validator RPC and format as key-value table
+      if (command === "actor-get") {
+        setIsExecuting(true);
+        try {
+          const address = args.find((a) => !a.startsWith("--")) ?? args[args.indexOf("--address") + 1];
+          const detail = await fetchActorDetail(session.validatorUrl, address);
+          const fullAddr = detail.address.startsWith("0x") ? detail.address : `0x${detail.address}`;
+          const storageKeys = Object.keys(detail.storage).length;
+          const rows = [
+            `  Actor Details`,
+            "",
+            `  Address:        ${fullAddr}`,
+            `  Code hash:      0x${detail.code_hash}`,
+            `  Balance:        ${detail.balance.toLocaleString("en-US")}`,
+            `  Nonce:          ${detail.nonce}`,
+            `  Mailbox:        ${detail.mailbox_count}`,
+            `  Storage keys:   ${storageKeys}`,
+          ];
+          if (storageKeys > 0 && storageKeys <= 20) {
+            rows.push("");
+            rows.push("  Storage:");
+            for (const [k, v] of Object.entries(detail.storage)) {
+              const safeVal = sanitize(v);
+              const displayVal = safeVal.length > 60 ? `${safeVal.slice(0, 60)}...` : safeVal;
+              rows.push(`    ${sanitize(k)}: ${displayVal}`);
+            }
+          }
+          addMessage("output", rows.join("\n"));
+        } catch (err: unknown) {
+          addMessage("error", err instanceof Error ? err.message : String(err));
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      // actor list — fetch from dashboard if configured, else local-only
       if (command === "actor-list") {
-        if (session.actors.length === 0) {
+        if (session.dashboardUrl && session.walletAddress) {
+          setIsExecuting(true);
+          try {
+            const actors = await fetchMyActors(session.dashboardUrl, session.walletAddress);
+            addMessage("output", formatActorList(actors, session.actors));
+          } catch (err: unknown) {
+            addMessage("error", `Failed to fetch actors: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            setIsExecuting(false);
+          }
+        } else if (session.actors.length === 0) {
           addMessage("output", "No actors deployed yet.");
         } else {
-          const list = session.actors
-            .map((a, i) => {
-              const suffix = a.label ? `  ${a.label}` : "";
-              return `  ${i + 1}. ${a.address}${suffix}`;
-            })
-            .join("\n");
-          addMessage("output", `Deployed actors:\n${list}`);
+          addMessage("output", formatLocalActorList(session.actors));
         }
         return;
       }
@@ -296,6 +415,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             const walletMatch = result.match(/Wallet address:\s*(0x[a-fA-F0-9]+)/);
             setSession({
               validatorUrl: freshConfig.validatorUrl,
+              dashboardUrl: freshConfig.dashboardUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
               actors: freshConfig.actors,
             });
