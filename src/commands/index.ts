@@ -283,6 +283,9 @@ export function parseCommand(input: string): CommandResult {
       const rest = parts.slice(2);
 
       switch (sub) {
+        case "launch":
+          return { type: "wizard", wizard: "token-launch" };
+
         case "create": {
           const { flags } = parseFlags(rest);
           if (!flags.name || !flags.symbol || !flags["initial-supply"]) {
@@ -496,8 +499,9 @@ function handleHelp(): CommandResult {
     "    runner register --stake <amount>        Register as a runner",
     "",
     "  Token (CIP-20):",
+    "    token launch                            Interactive token creation wizard",
     "    token create --name <n> --symbol <s> --initial-supply <n>",
-    "                                            Create a new token",
+    "                                            Create a new token (flags mode)",
     "    token transfer --token-id <id> --to <addr> --amount <n>",
     "                                            Transfer tokens",
     "    token approve --token-id <id> --spender <addr> --amount <n>",
