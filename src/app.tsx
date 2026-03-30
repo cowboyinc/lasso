@@ -15,6 +15,12 @@ import { basename, dirname } from "node:path";
 import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
 import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
 
+/** Strip ANSI escapes and control characters from untrusted strings. */
+function sanitize(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 function shortAddr(addr: string): string {
   const hex = addr.startsWith("0x") ? addr : `0x${addr}`;
   return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
@@ -270,8 +276,9 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             rows.push("");
             rows.push("  Storage:");
             for (const [k, v] of Object.entries(detail.storage)) {
-              const displayVal = v.length > 60 ? `${v.slice(0, 60)}...` : v;
-              rows.push(`    ${k}: ${displayVal}`);
+              const safeVal = sanitize(v);
+              const displayVal = safeVal.length > 60 ? `${safeVal.slice(0, 60)}...` : safeVal;
+              rows.push(`    ${sanitize(k)}: ${displayVal}`);
             }
           }
           addMessage("output", rows.join("\n"));
