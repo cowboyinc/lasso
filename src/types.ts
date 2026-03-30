@@ -43,4 +43,5 @@ export type CommandResult =
   | { type: "error"; text: string }
   | { type: "quit" }
   | { type: "clear" }
-  | { type: "execute"; command: string; args: string[] };
+  | { type: "execute"; command: string; args: string[] }
+  | { type: "wizard"; wizard: "token-launch" };

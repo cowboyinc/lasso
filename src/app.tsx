@@ -8,11 +8,74 @@ import { ThinkingSpinner } from "./components/ThinkingSpinner.js";
 import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
-import { deployActor, executeCowboy } from "./executor.js";
+import { deployActor, executeCowboy, getCowboyVersion } from "./executor.js";
 import { loadProjectConfig, saveActors } from "./config.js";
 import { basename, dirname } from "node:path";
 import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
+import { TokenLaunchWizard } from "./components/TokenLaunchWizard.js";
 import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
+
+function formatTokenList(raw: string): string {
+  // Strip WARN/INFO lines from cowboy CLI output
+  const cleaned = raw.replace(/^.*?(WARN|INFO).*$/gm, "").trim();
+
+  try {
+    const tokens = JSON.parse(cleaned);
+    if (!Array.isArray(tokens) || tokens.length === 0) {
+      return "No tokens found.";
+    }
+
+    const formatNum = (v: string | number) => {
+      const n = Number(v);
+      return isNaN(n) ? String(v) : n.toLocaleString("en-US");
+    };
+
+    const shortAddr = (addr: string) => {
+      const hex = addr.startsWith("0x") ? addr : `0x${addr}`;
+      return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
+    };
+
+    const shortId = (id: string) => {
+      const hex = id.startsWith("0x") ? id : `0x${id}`;
+      return `${hex.slice(0, 10)}...${hex.slice(-4)}`;
+    };
+
+    // Table header
+    const hdr = [
+      "Name".padEnd(20),
+      "Symbol".padEnd(8),
+      "Dec".padEnd(5),
+      "Total Supply".padStart(16),
+      "Max Supply".padStart(16),
+      "Owner".padEnd(13),
+      "Token ID".padEnd(16),
+    ].join("  ");
+
+    const sep = "-".repeat(hdr.length);
+
+    const rows = tokens.map((t: Record<string, unknown>) => {
+      const name = String(t.name ?? "").slice(0, 20).padEnd(20);
+      const symbol = String(t.symbol ?? "").padEnd(8);
+      const decimals = String(t.decimals ?? "").padEnd(5);
+      const supply = formatNum(t.total_supply as string).padStart(16);
+      const maxSupply = t.max_supply ? formatNum(t.max_supply as string).padStart(16) : "unlimited".padStart(16);
+      const owner = shortAddr(String(t.owner ?? "")).padEnd(13);
+      const tokenId = shortId(String(t.token_id ?? "")).padEnd(16);
+      return [name, symbol, decimals, supply, maxSupply, owner, tokenId].join("  ");
+    });
+
+    return [
+      `  Tokens on chain (${tokens.length})`,
+      "",
+      `  ${hdr}`,
+      `  ${sep}`,
+      ...rows.map((r) => `  ${r}`),
+    ].join("\n");
+  } catch {
+    // If JSON parse fails, return raw output
+    return cleaned;
+  }
+}
 
 interface AppProps {
   initialConfig: ProjectConfig;
@@ -96,6 +159,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
   const [isExecuting, setIsExecuting] = useState(false);
   const [pendingExit, setPendingExit] = useState(false);
+  const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
+  const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -117,6 +182,11 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       );
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Detect cowboy CLI version on mount
+  useEffect(() => {
+    getCowboyVersion().then(setCowboyVersion);
+  }, []);
 
   const executeCommand = useCallback(
     async (command: string, args: string[]) => {
@@ -251,6 +321,21 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         return;
       }
 
+      // token-list: format as table
+      if (command === "token-list") {
+        setIsExecuting(true);
+        try {
+          const cowboyArgs = commandToCowboyArgs(command, args);
+          const raw = await executeCowboy(cowboyArgs, session.validatorUrl);
+          addMessage("output", formatTokenList(raw));
+        } catch (err: unknown) {
+          addMessage("error", `Command failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
       setIsExecuting(true);
       try {
         const cowboyArgs = commandToCowboyArgs(command, args);
@@ -303,6 +388,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           exit();
           break;
 
+        case "wizard":
+          if (!projectReady) {
+            addMessage("error", "No project initialized. Run init <local|dev> first.");
+            break;
+          }
+          setActiveWizard(result.wizard);
+          break;
+
         case "execute":
           if (!projectReady && result.command !== "init") {
             addMessage("error", "No project initialized. Run init <local|dev> first.");
@@ -345,6 +438,32 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     setPendingExit(false);
   }, []);
 
+  const handleTokenLaunch = useCallback(
+    async (args: string[]) => {
+      setActiveWizard(null);
+      addMessage("command", `token create ${args.join(" ")}`);
+      setIsExecuting(true);
+      try {
+        const cowboyArgs = commandToCowboyArgs("token-create", args);
+        const result = await executeCowboy(cowboyArgs, session.validatorUrl);
+        addMessage("output", result);
+      } catch (err: unknown) {
+        addMessage(
+          "error",
+          `Token launch failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      } finally {
+        setIsExecuting(false);
+      }
+    },
+    [session, addMessage]
+  );
+
+  const handleWizardCancel = useCallback(() => {
+    setActiveWizard(null);
+    addMessage("system", "Token launch cancelled.");
+  }, [addMessage]);
+
   const handleInterrupt = useCallback(() => {
     if (isExecuting) return;
 
@@ -377,21 +496,31 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
       {isExecuting && <ThinkingSpinner />}
 
-      <InputArea
-        input={input}
-        onChange={handleInputChange}
-        onSubmit={handleSubmit}
-        onInterrupt={handleInterrupt}
-        onHistoryUp={handleHistoryUp}
-        onHistoryDown={handleHistoryDown}
-        onActivity={handleInputActivity}
-        isDisabled={isExecuting}
-      />
+      {activeWizard === "token-launch" ? (
+        <TokenLaunchWizard
+          walletAddress={session.walletAddress}
+          onLaunch={handleTokenLaunch}
+          onCancel={handleWizardCancel}
+          onMessage={addMessage}
+        />
+      ) : (
+        <InputArea
+          input={input}
+          onChange={handleInputChange}
+          onSubmit={handleSubmit}
+          onInterrupt={handleInterrupt}
+          onHistoryUp={handleHistoryUp}
+          onHistoryDown={handleHistoryDown}
+          onActivity={handleInputActivity}
+          isDisabled={isExecuting}
+        />
+      )}
 
       <StatusBar
         validatorUrl={session.validatorUrl}
         hasKey={projectReady}
         walletAddress={session.walletAddress}
+        cowboyVersion={cowboyVersion}
       />
     </Box>
   );
