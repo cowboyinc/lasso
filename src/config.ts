@@ -5,6 +5,8 @@ import type { ActorEntry, ProjectConfig } from "./types.js";
 const CONFIG_PATH = join(process.cwd(), ".cowboy", "config.json");
 const DEFAULT_RPC_URL = "http://localhost:4000";
 
+const DEFAULT_DASHBOARD_URL = "https://dashboard.mesa.cowboylabs.net";
+
 /**
  * Read the active environment from .cowboy/config.json in the current directory.
  * Returns ProjectConfig with validatorUrl, walletAddress, and actors,
@@ -25,7 +27,7 @@ export function loadProjectConfig(): ProjectConfig | null {
     );
     return {
       validatorUrl: env.rpc_url ?? DEFAULT_RPC_URL,
-      dashboardUrl: env.dashboard_url ?? null,
+      dashboardUrl: env.dashboard_url ?? DEFAULT_DASHBOARD_URL,
       walletAddress: env.wallet_address ?? null,
       actors,
     };
