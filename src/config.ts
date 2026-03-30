@@ -25,6 +25,7 @@ export function loadProjectConfig(): ProjectConfig | null {
     );
     return {
       validatorUrl: env.rpc_url ?? DEFAULT_RPC_URL,
+      dashboardUrl: env.dashboard_url ?? null,
       walletAddress: env.wallet_address ?? null,
       actors,
     };

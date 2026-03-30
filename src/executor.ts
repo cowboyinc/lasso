@@ -53,6 +53,69 @@ export async function executeCowboy(
   }
 }
 
+export interface ActorInfo {
+  address: string;
+  deployer: string;
+  balance: number;
+  nonce: number;
+  storage_size: number | null;
+  deploy_height: number | null;
+  code_hash: string | null;
+}
+
+export async function detectWalletAddress(): Promise<string | null> {
+  try {
+    const result = await executeCowboyAsync(["wallet", "address"]);
+    const match = result.stdout.trim().match(/^(0x[a-fA-F0-9]{40})$/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ActorDetail {
+  address: string;
+  code_hash: string;
+  balance: number;
+  nonce: number;
+  mailbox_count: number;
+  storage: Record<string, string>;
+}
+
+export async function fetchActorDetail(
+  validatorUrl: string,
+  address: string
+): Promise<ActorDetail> {
+  const clean = address.replace(/^0x/, "");
+  const url = `${validatorUrl}/actor/${clean}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { message?: string } | null;
+    throw new Error(body?.message ?? `Actor not found (${res.status})`);
+  }
+  return (await res.json()) as ActorDetail;
+}
+
+export async function fetchMyActors(
+  dashboardUrl: string,
+  walletAddress: string
+): Promise<ActorInfo[]> {
+  const clean = walletAddress.replace(/^0x/, "");
+  const url = `${dashboardUrl}/api/wallet/${clean}/actors`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Dashboard returned ${res.status}`);
+  const data = (await res.json()) as { actors: Record<string, unknown>[] };
+  return (data.actors ?? []).map((a) => ({
+    address: String(a.address ?? ""),
+    deployer: String(a.deployer ?? ""),
+    balance: Number(a.balance ?? 0),
+    nonce: Number(a.nonce ?? 0),
+    storage_size: a.storageSize != null ? Number(a.storageSize) : null,
+    deploy_height: a.deployHeight != null ? Number(a.deployHeight) : null,
+    code_hash: a.codeHash ? String(a.codeHash) : null,
+  }));
+}
+
 export async function deployActor(
   filePath: string,
   validatorUrl: string

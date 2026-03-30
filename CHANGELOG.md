@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `actor list` fetches actors from dashboard API (`GET /api/wallet/:address/actors`) with formatted table showing label, full address, balance, nonce, storage size, and deploy height
+- `actor get <address>` displays a formatted key-value table instead of raw JSON, fetched directly from validator RPC
+- Auto-detect wallet address from key file on startup
+- `dashboard_url` config field for connecting to the dashboard backend
+
+### Changed
+- `actor get` and `actor logs` accept positional address (`actor get <addr>`) instead of requiring `--address` flag
+- Actor list table shows full addresses for easy copy-paste
+- Falls back to local-only actor list when `dashboard_url` is not configured
+
 ## [0.1.3] - 2026-03-13
 
 ### Changed

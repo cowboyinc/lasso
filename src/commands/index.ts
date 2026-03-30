@@ -141,11 +141,12 @@ export function parseCommand(input: string): CommandResult {
         }
 
         case "get": {
-          const { flags } = parseFlags(rest);
-          if (!flags.address) {
-            return { type: "error", text: "Usage: actor get --address <address>" };
+          const { flags, positional } = parseFlags(rest);
+          const address = flags.address ?? positional[0];
+          if (!address) {
+            return { type: "error", text: "Usage: actor get <address>" };
           }
-          return { type: "execute", command: "actor-get", args: ["--address", flags.address] };
+          return { type: "execute", command: "actor-get", args: ["--address", address] };
         }
 
         case "address": {
@@ -187,11 +188,12 @@ export function parseCommand(input: string): CommandResult {
           return { type: "execute", command: "actor-list", args: [] };
 
         case "logs": {
-          const { flags } = parseFlags(rest);
-          if (!flags.address) {
-            return { type: "error", text: "Usage: actor logs --address <address>" };
+          const { flags, positional } = parseFlags(rest);
+          const address = flags.address ?? positional[0];
+          if (!address) {
+            return { type: "error", text: "Usage: actor logs <address>" };
           }
-          return { type: "execute", command: "actor-logs", args: ["--address", flags.address] };
+          return { type: "execute", command: "actor-logs", args: ["--address", address] };
         }
 
         default:
@@ -480,13 +482,13 @@ function handleHelp(): CommandResult {
     "    actor deploy <file.py>                  Deploy an actor to the chain",
     "    actor execute <address> <method> [--payload <json>]",
     "                                            Execute an actor handler",
-    "    actor get --address <a>                 Get actor details",
+    "    actor get <address>                     Get actor details",
     "    actor address --code <f> --creator <c> --salt <s>",
     "                                            Compute actor address",
     "    actor new <name>                        Scaffold a new actor project",
     "    actor label <address|#> <text>           Set a label for an actor",
     "    actor list                              List deployed actors",
-    "    actor logs --address <a>                View actor logs",
+    "    actor logs <address>                    View actor logs",
     "",
     "  Runner:",
     "    runner get --address <a>                Get runner details",
