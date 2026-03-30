@@ -1,14 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.4] - 2026-03-30
 
 ### Added
+- Interactive token launch wizard: `token launch` walks through name, symbol, decimals, initial supply, and max supply with smart defaults and a confirmation summary
+- `token list` now displays a formatted table instead of raw JSON
+- Cowboy CLI version shown in status bar alongside lasso version
 - `actor list` fetches actors from dashboard API (`GET /api/wallet/:address/actors`) with formatted table showing label, full address, balance, nonce, storage size, and deploy height
 - `actor get <address>` displays a formatted key-value table instead of raw JSON, fetched directly from validator RPC
 - Auto-detect wallet address from key file on startup
 - `dashboard_url` config field for connecting to the dashboard backend
 
 ### Changed
+- Bumped version to 0.1.4
 - `actor get` and `actor logs` accept positional address (`actor get <addr>`) instead of requiring `--address` flag
 - Actor list table shows full addresses for easy copy-paste
 - Falls back to local-only actor list when `dashboard_url` is not configured
