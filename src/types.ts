@@ -5,12 +5,14 @@ export interface ActorEntry {
 
 export interface ProjectConfig {
   validatorUrl: string;
+  dashboardUrl: string | null;
   walletAddress: string | null;
   actors: ActorEntry[];
 }
 
 export interface SessionState {
   validatorUrl: string;
+  dashboardUrl: string | null;
   walletAddress: string | null;
   actors: ActorEntry[];
 }
