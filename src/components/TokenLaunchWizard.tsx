@@ -37,9 +37,12 @@ function deriveSymbol(name: string): string {
 }
 
 function formatNumber(value: string): string {
-  const num = Number(value.replace(/,/g, ""));
-  if (isNaN(num)) return value;
-  return num.toLocaleString("en-US");
+  const cleaned = value.replace(/,/g, "");
+  try {
+    return BigInt(cleaned).toLocaleString("en-US");
+  } catch {
+    return value;
+  }
 }
 
 function parseSupply(value: string): string {
@@ -146,8 +149,10 @@ export function TokenLaunchWizard({ walletAddress, onLaunch, onCancel, onMessage
 
         case "initialSupply": {
           const raw = parseSupply(trimmed || "1000000");
-          const num = Number(raw);
-          if (isNaN(num) || num < 0 || !Number.isInteger(num)) {
+          try {
+            const val = BigInt(raw);
+            if (val < 0n) throw new Error();
+          } catch {
             setError("Initial supply must be a non-negative integer");
             return;
           }
@@ -163,12 +168,18 @@ export function TokenLaunchWizard({ walletAddress, onLaunch, onCancel, onMessage
           let finalMax = "";
           if (trimmed) {
             const raw = parseSupply(trimmed);
-            const num = Number(raw);
-            if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
+            let val: bigint;
+            try {
+              val = BigInt(raw);
+            } catch {
               setError("Max supply must be a positive integer");
               return;
             }
-            if (num < Number(config.initialSupply)) {
+            if (val <= 0n) {
+              setError("Max supply must be a positive integer");
+              return;
+            }
+            if (val < BigInt(config.initialSupply)) {
               setError("Max supply cannot be less than initial supply");
               return;
             }

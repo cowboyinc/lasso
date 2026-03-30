@@ -15,6 +15,12 @@ import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
 import { TokenLaunchWizard } from "./components/TokenLaunchWizard.js";
 import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
 
+/** Strip ANSI escapes and control characters from untrusted strings. */
+function sanitize(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1F\x7F-\x9F]/g, "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 function formatTokenList(raw: string): string {
   // Strip WARN/INFO lines from cowboy CLI output
   const cleaned = raw.replace(/^.*?(WARN|INFO).*$/gm, "").trim();
@@ -54,13 +60,13 @@ function formatTokenList(raw: string): string {
     const sep = "-".repeat(hdr.length);
 
     const rows = tokens.map((t: Record<string, unknown>) => {
-      const name = String(t.name ?? "").slice(0, 20).padEnd(20);
-      const symbol = String(t.symbol ?? "").padEnd(8);
+      const name = sanitize(String(t.name ?? "")).slice(0, 20).padEnd(20);
+      const symbol = sanitize(String(t.symbol ?? "")).padEnd(8);
       const decimals = String(t.decimals ?? "").padEnd(5);
       const supply = formatNum(t.total_supply as string).padStart(16);
       const maxSupply = t.max_supply ? formatNum(t.max_supply as string).padStart(16) : "unlimited".padStart(16);
-      const owner = shortAddr(String(t.owner ?? "")).padEnd(13);
-      const tokenId = shortId(String(t.token_id ?? "")).padEnd(16);
+      const owner = shortAddr(sanitize(String(t.owner ?? ""))).padEnd(13);
+      const tokenId = shortId(sanitize(String(t.token_id ?? ""))).padEnd(16);
       return [name, symbol, decimals, supply, maxSupply, owner, tokenId].join("  ");
     });
 
