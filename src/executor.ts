@@ -82,12 +82,17 @@ export interface ActorDetail {
   storage: Record<string, string>;
 }
 
+const HEX_ADDRESS_RE = /^(0x)?[a-fA-F0-9]{40}$/;
+
 export async function fetchActorDetail(
   validatorUrl: string,
   address: string
 ): Promise<ActorDetail> {
+  if (!HEX_ADDRESS_RE.test(address)) {
+    throw new Error(`Invalid address format: ${address}`);
+  }
   const clean = address.replace(/^0x/, "");
-  const url = `${validatorUrl}/actor/${clean}`;
+  const url = `${validatorUrl}/actor/${encodeURIComponent(clean)}`;
   const res = await fetch(url);
   if (!res.ok) {
     const body = await res.json().catch(() => null) as { message?: string } | null;
@@ -100,8 +105,11 @@ export async function fetchMyActors(
   dashboardUrl: string,
   walletAddress: string
 ): Promise<ActorInfo[]> {
+  if (!HEX_ADDRESS_RE.test(walletAddress)) {
+    throw new Error(`Invalid wallet address format: ${walletAddress}`);
+  }
   const clean = walletAddress.replace(/^0x/, "");
-  const url = `${dashboardUrl}/api/wallet/${clean}/actors`;
+  const url = `${dashboardUrl}/api/wallet/${encodeURIComponent(clean)}/actors`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Dashboard returned ${res.status}`);
   const data = (await res.json()) as { actors: Record<string, unknown>[] };
