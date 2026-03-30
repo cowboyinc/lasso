@@ -53,6 +53,16 @@ export async function executeCowboy(
   }
 }
 
+export async function getCowboyVersion(): Promise<string | null> {
+  try {
+    const result = await executeCowboyAsync(["version"]);
+    const match = result.stdout.trim().match(/cowboy\s+([\d.]+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function deployActor(
   filePath: string,
   validatorUrl: string

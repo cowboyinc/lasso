@@ -6,9 +6,10 @@ interface StatusBarProps {
   validatorUrl: string;
   hasKey: boolean;
   walletAddress: string | null;
+  cowboyVersion: string | null;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
@@ -26,7 +27,10 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress }: StatusBarProp
           </>
         )}
       </Text>
-      <Text dimColor>v{VERSION}</Text>
+      <Text dimColor>
+        {cowboyVersion && <>cli v{cowboyVersion}{"  "}|{"  "}</>}
+        lasso v{VERSION}
+      </Text>
     </Box>
   );
 }

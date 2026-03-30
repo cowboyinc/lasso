@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.4] - 2026-03-30
+
+### Added
+- Interactive token launch wizard: `token launch` walks through name, symbol, decimals, initial supply, and max supply with smart defaults and a confirmation summary
+- `token list` now displays a formatted table instead of raw JSON
+- Cowboy CLI version shown in status bar alongside lasso version
+
+### Changed
+- Bumped version to 0.1.4
+
 ## [0.1.3] - 2026-03-13
 
 ### Changed
