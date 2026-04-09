@@ -8,6 +8,15 @@ export async function resolveValueItems(
   prefix: string,
   context: CompletionContext
 ): Promise<CompletionItem[]> {
+  if (valueKind.type === "path") {
+    return (context.providers?.path ?? pathProvider)({
+      prefix,
+      cwd: context.cwd,
+      session: context.session,
+      cache: context.cache,
+    });
+  }
+
   const cacheKey = getValueCacheKey(valueKind, prefix, context);
   const cached = context.cache.get(cacheKey);
   if (cached) {
@@ -20,14 +29,6 @@ export async function resolveValueItems(
       items = (valueKind.options ?? [])
         .filter((option) => option.startsWith(prefix.toLowerCase()))
         .map((option) => ({ value: option, label: option, kind: "value" as const }));
-      break;
-    case "path":
-      items = await (context.providers?.path ?? pathProvider)({
-        prefix,
-        cwd: context.cwd,
-        session: context.session,
-        cache: context.cache,
-      });
       break;
     case "actor":
       items = await (context.providers?.actor ?? actorProvider)({
@@ -55,10 +56,6 @@ export async function resolveValueItems(
 
 export async function pathProvider(request: ProviderRequest): Promise<CompletionItem[]> {
   const prefix = request.prefix;
-  const cacheKey = `path:${request.cwd}:${prefix}`;
-  const cached = request.cache.get(cacheKey);
-  if (cached) return cached;
-
   const inputPath = prefix || "";
   const endsInSeparator = inputPath.endsWith("/");
   const hasDirectorySegments = inputPath.includes("/");
@@ -69,7 +66,6 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
       : ".";
   const fragment = endsInSeparator ? "" : hasDirectorySegments ? basename(inputPath) : inputPath;
   if (isAbsolute(inputPath)) {
-    request.cache.set(cacheKey, []);
     return [];
   }
 
@@ -79,13 +75,11 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
     absoluteCwd = realpathSync(request.cwd);
     absoluteBaseDir = realpathSync(resolve(absoluteCwd, baseDir));
   } catch {
-    request.cache.set(cacheKey, []);
     return [];
   }
 
   const relativeBaseDir = relative(absoluteCwd, absoluteBaseDir);
   if (relativeBaseDir === ".." || relativeBaseDir.startsWith(`..${sep}`) || isAbsolute(relativeBaseDir)) {
-    request.cache.set(cacheKey, []);
     return [];
   }
 
@@ -93,7 +87,6 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
   try {
     entries = readdirSync(absoluteBaseDir);
   } catch {
-    request.cache.set(cacheKey, []);
     return [];
   }
 
@@ -117,7 +110,6 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
     }
   }).sort((left, right) => left.value.localeCompare(right.value));
 
-  request.cache.set(cacheKey, items);
   return items;
 }
 

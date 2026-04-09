@@ -237,6 +237,38 @@ test("reuses cached provider results until invalidated", async () => {
   assert.equal(calls, 2);
 });
 
+test("path completions reflect filesystem changes across repeated lookups", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "lasso-complete-refresh-"));
+  mkdirSync(join(cwd, "actors"));
+  writeFileSync(join(cwd, "actors", "alpha.py"), "");
+  const cache = new CompletionCache();
+
+  const first = await getCompletionResult({
+    input: "actor deploy actors/",
+    cursorOffset: 20,
+    cwd,
+    session: createSession(),
+    cache,
+  });
+
+  assert.deepEqual(first?.items.map((item) => item.value), ["actors/alpha.py"]);
+
+  writeFileSync(join(cwd, "actors", "beta.py"), "");
+
+  const second = await getCompletionResult({
+    input: "actor deploy actors/",
+    cursorOffset: 20,
+    cwd,
+    session: createSession(),
+    cache,
+  });
+
+  assert.deepEqual(second?.items.map((item) => item.value), [
+    "actors/alpha.py",
+    "actors/beta.py",
+  ]);
+});
+
 test("returns null when no route or provider applies", async () => {
   const result = await getCompletionResult({
     input: "unknown command",

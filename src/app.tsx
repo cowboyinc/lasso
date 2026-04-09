@@ -239,9 +239,15 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
   const completionCacheRef = useRef(new CompletionCache());
+  const autocompleteRequestRef = useRef(0);
+  const latestInputRef = useRef(input);
+  const latestSuggestionsRef = useRef(suggestions);
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+
+  latestInputRef.current = input;
+  latestSuggestionsRef.current = suggestions;
 
   const addMessage = useCallback(
     (role: ConsoleMessage["role"], content: string) => {
@@ -599,29 +605,41 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   const handleAutocomplete = useCallback(() => {
     void (async () => {
+      const requestId = ++autocompleteRequestRef.current;
+      const inputSnapshot = input;
       const match = await getCompletionResult({
-        input: input.value,
-        cursorOffset: input.cursorOffset,
+        input: inputSnapshot.value,
+        cursorOffset: inputSnapshot.cursorOffset,
         cwd: process.cwd(),
         session,
         cache: completionCacheRef.current,
       });
+
+      const latestInput = latestInputRef.current;
+      if (
+        requestId !== autocompleteRequestRef.current ||
+        latestInput.value !== inputSnapshot.value ||
+        latestInput.cursorOffset !== inputSnapshot.cursorOffset
+      ) {
+        return;
+      }
 
       if (!match) {
         setSuggestions(null);
         return;
       }
 
-      if (suggestions && matchesSuggestionContext(suggestions, {
+      const latestSuggestions = latestSuggestionsRef.current;
+      if (latestSuggestions && matchesSuggestionContext(latestSuggestions, {
         tokenStart: match.tokenStart,
         tokenEnd: match.tokenEnd,
         items: match.items,
-      }, input)) {
-        setSuggestions(moveSuggestionSelection(suggestions, 1));
+      }, inputSnapshot)) {
+        setSuggestions(moveSuggestionSelection(latestSuggestions, 1));
         return;
       }
 
-      const result = openSuggestions(input, {
+      const result = openSuggestions(inputSnapshot, {
         tokenStart: match.tokenStart,
         tokenEnd: match.tokenEnd,
         items: match.items,
@@ -630,7 +648,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       setInput(result.nextState);
       setSuggestions(result.menu);
     })();
-  }, [input, session, suggestions]);
+  }, [input, session]);
 
   const handleSuggestionNext = useCallback(() => {
     if (!suggestions) return;
