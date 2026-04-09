@@ -10,12 +10,18 @@ export function LineEditor({
   onSubmit,
   onInterrupt,
   onCancel,
+  onAutocomplete,
+  onSuggestionNext,
+  onSuggestionPrevious,
+  onSuggestionAccept,
+  onSuggestionDismiss,
   onHistoryUp,
   onHistoryDown,
   onActivity,
   placeholder,
   mask,
   isDisabled,
+  hasOpenSuggestions,
 }: LineEditorProps) {
   const { setRawMode, internal_eventEmitter } = useStdin();
 
@@ -43,13 +49,48 @@ export function LineEditor({
         return;
       }
 
+      if (hasOpenSuggestions && (key.return || input === "\r" || input === "\n")) {
+        onSuggestionAccept?.();
+        return;
+      }
+
       if (key.return || input === "\r" || input === "\n") {
         onSubmit(value);
         return;
       }
 
       if (key.escape) {
+        if (hasOpenSuggestions) {
+          onSuggestionDismiss?.();
+          return;
+        }
         onCancel?.();
+        return;
+      }
+
+      if (key.tab) {
+        if (hasOpenSuggestions) {
+          if (key.shift) {
+            onSuggestionPrevious?.();
+          } else {
+            onSuggestionNext?.();
+          }
+        } else {
+          onAutocomplete?.();
+        }
+        onActivity?.();
+        return;
+      }
+
+      if (hasOpenSuggestions && key.upArrow) {
+        onActivity?.();
+        onSuggestionPrevious?.();
+        return;
+      }
+
+      if (hasOpenSuggestions && key.downArrow) {
+        onActivity?.();
+        onSuggestionNext?.();
         return;
       }
 
@@ -92,12 +133,18 @@ export function LineEditor({
     cursorOffset,
     internal_eventEmitter,
     isDisabled,
+    hasOpenSuggestions,
     onActivity,
+    onAutocomplete,
     onCancel,
     onChange,
     onHistoryDown,
     onHistoryUp,
     onInterrupt,
+    onSuggestionAccept,
+    onSuggestionDismiss,
+    onSuggestionNext,
+    onSuggestionPrevious,
     onSubmit,
     value,
   ]);
@@ -105,7 +152,7 @@ export function LineEditor({
   return renderEditor({ value, cursorOffset, placeholder, mask });
 }
 
-function parseInput(data: string) {
+export function parseInput(data: string) {
   const keypress = parseRawKeypress(data);
   const key = {
     upArrow: keypress.name === "up",
@@ -118,6 +165,7 @@ function parseInput(data: string) {
     escape: keypress.name === "escape",
     ctrl: keypress.ctrl,
     tab: keypress.name === "tab",
+    shift: keypress.shift,
     backspace: keypress.name === "backspace",
     delete: keypress.name === "delete",
     meta: keypress.meta || keypress.name === "escape" || keypress.option,
@@ -210,6 +258,10 @@ function parseControlSequence(sequence: string) {
   }
 
   const body = sequence.slice(1);
+  if (body === "[Z") {
+    return createParsedKey("tab", sequence, { shift: true });
+  }
+
   const namedSequence = NAMED_SEQUENCES[body];
   if (namedSequence) {
     return createParsedKey(namedSequence, sequence);
