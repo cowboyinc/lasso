@@ -101,6 +101,25 @@ test("returns directory path candidates with a trailing slash", async () => {
   assert.equal(result?.items[0]?.detail, "directory");
 });
 
+test("skips unsafe path candidates that would alter tokenization", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "lasso-complete-safe-"));
+  mkdirSync(join(cwd, "actors"));
+  writeFileSync(join(cwd, "actors", "safe.py"), "");
+  writeFileSync(join(cwd, "actors", "--payload.py"), "");
+  writeFileSync(join(cwd, "actors", "quo\"te.py"), "");
+  writeFileSync(join(cwd, "actors", "apo's.py"), "");
+
+  const result = await getCompletionResult({
+    input: "actor deploy actors/",
+    cursorOffset: 20,
+    cwd,
+    session: createSession(),
+    cache: new CompletionCache(),
+  });
+
+  assert.deepEqual(result?.items.map((item) => item.value), ["actors/safe.py"]);
+});
+
 test("returns path candidates from within a completed subdirectory", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "lasso-complete-subdir-"));
   mkdirSync(join(cwd, "actors"));

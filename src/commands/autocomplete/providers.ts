@@ -99,6 +99,9 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
       const relativePath = baseDir === "." ? entry : `${baseDir}/${entry}`;
       const isDirectory = statSync(join(absoluteBaseDir, entry)).isDirectory();
       const value = isDirectory ? `${relativePath}/` : relativePath;
+      if (!isSafeCompletionPath(value)) {
+        return [];
+      }
       return [{
         value,
         label: value,
@@ -111,6 +114,16 @@ export async function pathProvider(request: ProviderRequest): Promise<Completion
   }).sort((left, right) => left.value.localeCompare(right.value));
 
   return items;
+}
+
+function isSafeCompletionPath(value: string): boolean {
+  if (value.includes("\"") || value.includes("'") || value.includes("\\")) {
+    return false;
+  }
+
+  const normalized = value.endsWith("/") ? value.slice(0, -1) : value;
+  const basename = normalized.split("/").pop() ?? normalized;
+  return !basename.startsWith("-");
 }
 
 export async function actorProvider(request: ProviderRequest): Promise<CompletionItem[]> {
