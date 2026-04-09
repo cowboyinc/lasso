@@ -16,8 +16,8 @@ An interactive terminal console for the Cowboy blockchain. Lasso wraps the `cowb
 ## Getting Started
 
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 On launch, Lasso checks the current directory for a `.cowboy/` project. If none is found, run `init` to create one:
