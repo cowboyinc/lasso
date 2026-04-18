@@ -5,6 +5,19 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { App } from "./app.js";
 import { loadProjectConfig } from "./config.js";
+import type { ProjectConfig } from "./types.js";
+
+const DEFAULT_CONFIG: ProjectConfig = {
+  validatorUrl: "http://localhost:4000",
+  dashboardUrl: null,
+  walletAddress: null,
+  actors: [],
+  runnerPreferences: {
+    primaryRunner: null,
+    helperRunner: null,
+    smallPromptRouting: true,
+  },
+};
 
 function main() {
   const config = loadProjectConfig();
@@ -18,7 +31,7 @@ function main() {
 
   render(
     <App
-      initialConfig={config ?? { validatorUrl: "http://localhost:4000", dashboardUrl: null, walletAddress: null, actors: [] }}
+      initialConfig={config ?? DEFAULT_CONFIG}
       hasProject={hasProject}
     />,
     { exitOnCtrlC: false }

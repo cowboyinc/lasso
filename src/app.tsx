@@ -8,13 +8,28 @@ import { ThinkingSpinner } from "./components/ThinkingSpinner.js";
 import { InputArea } from "./components/InputArea.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { parseCommand } from "./commands/index.js";
-import { deployActor, executeCowboy, getCowboyVersion, fetchMyActors, fetchActorDetail, detectWalletAddress } from "./executor.js";
-import type { ActorInfo } from "./executor.js";
-import { loadProjectConfig, saveActors } from "./config.js";
+import {
+  deployActor,
+  executeCowboy,
+  fetchActorDetail,
+  detectWalletAddress,
+  fetchActiveRunners,
+  fetchRunnerDetail,
+  fetchMyActors,
+  getCowboyVersion,
+  fetchJobStatus,
+  fetchJobResults,
+  fetchJobVerified,
+  submitLlmJob,
+  waitForJobId,
+  waitForLlmJobResult,
+} from "./executor.js";
+import type { ActorInfo, RunnerInfo } from "./executor.js";
+import { loadProjectConfig, saveActors, saveRunnerPreferences } from "./config.js";
 import { basename, dirname } from "node:path";
 import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
 import { TokenLaunchWizard } from "./components/TokenLaunchWizard.js";
-import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer } from "./types.js";
+import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer, RunnerPreferences } from "./types.js";
 
 /** Strip ANSI escapes and control characters from untrusted strings. */
 function sanitize(s: string): string {
@@ -150,6 +165,170 @@ function formatLocalActorList(actors: ActorEntry[]): string {
   ].join("\n");
 }
 
+function stringifyResultData(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    if (typeof record.content === "string") return record.content;
+    if (Array.isArray(record.content)) {
+      for (const item of record.content) {
+        if (item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string") {
+          return String((item as Record<string, unknown>).text);
+        }
+      }
+    }
+    if (record.data != null) return stringifyResultData(record.data);
+    if (typeof record.text === "string") return record.text;
+    if (typeof record.response === "string") return record.response;
+  }
+
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
+}
+
+function isSmallPrompt(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (trimmed.length <= 140) return true;
+  return /^(summarize|rename|title|fix|clean up|format|one-line|one line|short answer)\b/i.test(trimmed);
+}
+
+function normalizeRunnerAddress(address: string | null): string | null {
+  if (!address) return null;
+  return address.toLowerCase();
+}
+
+function inferRunnerSizeHint(runner: RunnerInfo): string {
+  const models = runner.rate_card.supported_models.join(" ").toLowerCase();
+  if (/(72b|70b|405b|large)/.test(models)) return "large";
+  if (/(3b|7b|8b|mini|small)/.test(models)) return "small";
+  return "unknown";
+}
+
+function rankLlmRunners(runners: RunnerInfo[]): RunnerInfo[] {
+  return [...runners].sort((a, b) => {
+    const score = (runner: RunnerInfo) => {
+      const size = inferRunnerSizeHint(runner);
+      const sizeScore = size === "large" ? 200 : size === "small" ? 100 : 0;
+      const capacityScore = runner.capabilities.max_concurrent_jobs;
+      const priceScore = runner.rate_card.llm_output_token > 0 ? Math.max(1, 1_000_000 / runner.rate_card.llm_output_token) : 0;
+      return sizeScore + capacityScore + priceScore;
+    };
+    return score(b) - score(a);
+  });
+}
+
+function pickPreferredRunner(
+  runners: RunnerInfo[],
+  preferences: RunnerPreferences,
+  preferredAddress: string | null
+): RunnerInfo | null {
+  const normalized = normalizeRunnerAddress(preferredAddress);
+  if (!normalized) return null;
+  return runners.find((runner) => normalizeRunnerAddress(runner.address) === normalized) ?? null;
+}
+
+function chooseRunnerRoute(
+  prompt: string,
+  runners: RunnerInfo[],
+  preferences: RunnerPreferences
+): {
+  primary: RunnerInfo | null;
+  helper: RunnerInfo | null;
+  selected: RunnerInfo | null;
+  route: "primary" | "helper";
+  advisory: boolean;
+} {
+  const llmRunners = rankLlmRunners(
+    runners.filter((runner) => runner.capabilities.job_types.includes("llm"))
+  );
+
+  const primary =
+    pickPreferredRunner(llmRunners, preferences, preferences.primaryRunner) ??
+    llmRunners[0] ??
+    null;
+
+  const helper =
+    pickPreferredRunner(llmRunners, preferences, preferences.helperRunner) ??
+    llmRunners.find((runner) => runner.address !== primary?.address) ??
+    null;
+
+  const useHelper =
+    preferences.smallPromptRouting &&
+    isSmallPrompt(prompt) &&
+    helper != null;
+
+  return {
+    primary,
+    helper,
+    selected: useHelper ? helper : primary,
+    route: useHelper ? "helper" : "primary",
+    advisory: true,
+  };
+}
+
+function formatRunnerList(
+  runners: RunnerInfo[],
+  preferences: RunnerPreferences
+): string {
+  if (runners.length === 0) {
+    return "No active runners found.";
+  }
+
+  const llmSelection = chooseRunnerRoute("Summarize this", runners, preferences);
+  const hdr = [
+    "#".padEnd(4),
+    "Role".padEnd(10),
+    "Address".padEnd(44),
+    "Jobs".padEnd(12),
+    "Models".padEnd(18),
+    "Rep".padStart(4),
+    "Load".padStart(9),
+  ].join("  ");
+  const sep = "-".repeat(hdr.length);
+
+  const rows = runners.map((runner, index) => {
+    let role = "";
+    if (llmSelection.primary?.address === runner.address) role = "primary";
+    if (llmSelection.helper?.address === runner.address) role = role ? `${role},help` : "helper";
+
+    return [
+      String(index + 1).padEnd(4),
+      role.padEnd(10),
+      runner.address.padEnd(44),
+      runner.capabilities.job_types.join(",").slice(0, 12).padEnd(12),
+      runner.rate_card.supported_models.join(",").slice(0, 18).padEnd(18),
+      String(runner.reputation).padStart(4),
+      `${runner.active_jobs}/${runner.capabilities.max_concurrent_jobs}`.padStart(9),
+    ].join("  ");
+  });
+
+  const notes = [
+    `  Active runners (${runners.length})`,
+    "  Primary/helper selection is advisory until capability-aware dispatch lands in the node.",
+  ];
+
+  if (llmSelection.primary) {
+    notes.push(`  Current primary: ${llmSelection.primary.address}`);
+  }
+  if (llmSelection.helper) {
+    notes.push(`  Current helper:  ${llmSelection.helper.address}`);
+  }
+
+  return [
+    ...notes,
+    "",
+    `  ${hdr}`,
+    `  ${sep}`,
+    ...rows.map((row) => `  ${row}`),
+  ].join("\n");
+}
+
 interface AppProps {
   initialConfig: ProjectConfig;
   hasProject: boolean;
@@ -227,6 +406,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     dashboardUrl: initialConfig.dashboardUrl,
     walletAddress: initialConfig.walletAddress,
     actors: initialConfig.actors,
+    runnerPreferences: initialConfig.runnerPreferences,
   });
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
@@ -252,9 +432,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     if (!projectReady) {
       addMessage(
         "system",
-        "No .cowboy/ project found in current directory. Run init <local|dev> to start."
+        "No .cowboy/ project found in current directory. Run /init <local|dev> to start."
       );
+      return;
     }
+    addMessage(
+      "system",
+      "Slash commands start with /. Plain text submits an AI job to the runner network."
+    );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Detect cowboy CLI version on mount
@@ -272,6 +457,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       });
     }
   }, [projectReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const updateRunnerPrefs = useCallback((patch: Partial<RunnerPreferences>) => {
+    setSession((prev) => {
+      const runnerPreferences = { ...prev.runnerPreferences, ...patch };
+      saveRunnerPreferences(runnerPreferences);
+      return { ...prev, runnerPreferences };
+    });
+  }, []);
 
   const executeCommand = useCallback(
     async (command: string, args: string[]) => {
@@ -401,6 +594,138 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         return;
       }
 
+      if (command === "runner-list") {
+        setIsExecuting(true);
+        try {
+          const runners = await fetchActiveRunners(session.validatorUrl);
+          addMessage("output", formatRunnerList(runners, session.runnerPreferences));
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch runners: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      if (command === "runner-get") {
+        setIsExecuting(true);
+        try {
+          const address = args.find((a) => !a.startsWith("--")) ?? args[args.indexOf("--address") + 1];
+          const runner = await fetchRunnerDetail(session.validatorUrl, address);
+          const lines = [
+            "  Runner Details",
+            "",
+            `  Address:       ${runner.address}`,
+            `  Health:        ${runner.health}`,
+            `  Reputation:    ${runner.reputation}`,
+            `  Stake:         ${runner.stake.toLocaleString("en-US")}`,
+            `  Jobs:          ${runner.capabilities.job_types.join(", ") || "-"}`,
+            `  Models:        ${runner.rate_card.supported_models.join(", ") || "-"}`,
+            `  Concurrency:   ${runner.active_jobs}/${runner.capabilities.max_concurrent_jobs}`,
+          ];
+          addMessage("output", lines.join("\n"));
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch runner: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      if (command === "runner-primary" || command === "runner-helper") {
+        const value = args[0] ?? "auto";
+        const key = command === "runner-primary" ? "primaryRunner" : "helperRunner";
+        if (value !== "auto" && !/^(0x)?[a-fA-F0-9]{40}$/.test(value)) {
+          addMessage("error", `Invalid runner address: ${value}`);
+          return;
+        }
+        updateRunnerPrefs({ [key]: value === "auto" ? null : value } as Partial<RunnerPreferences>);
+        addMessage(
+          "output",
+          value === "auto"
+            ? `${command === "runner-primary" ? "Primary" : "Helper"} runner reset to auto selection.`
+            : `${command === "runner-primary" ? "Primary" : "Helper"} runner set to ${value}.`
+        );
+        return;
+      }
+
+      if (command === "job-status") {
+        setIsExecuting(true);
+        try {
+          const status = await fetchJobStatus(session.validatorUrl, args[0]);
+          addMessage("output", `Job ${status.job_id}\n\n  Status: ${status.status}`);
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch job status: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      if (command === "job-results") {
+        setIsExecuting(true);
+        try {
+          const results = await fetchJobResults(session.validatorUrl, args[0]);
+          if (results.results.length === 0) {
+            addMessage("output", `Job ${results.job_id}\n\n  No results yet.`);
+          } else {
+            const blocks = results.results.map((result, index) => [
+              `  Result ${index + 1}`,
+              `  Runner: ${result.runner}`,
+              "",
+              stringifyResultData(result.data),
+            ].join("\n"));
+            addMessage("output", [`Job ${results.job_id}`, "", ...blocks].join("\n\n"));
+          }
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch job results: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      if (command === "job-verified") {
+        setIsExecuting(true);
+        try {
+          const verified = await fetchJobVerified(session.validatorUrl, args[0]);
+          addMessage(
+            "output",
+            [
+              `Job ${verified.job_id}`,
+              "",
+              `  Consensus: ${verified.consensus_count}/${verified.total_runners}`,
+              "",
+              stringifyResultData(verified.data),
+            ].join("\n")
+          );
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch verified job result: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      if (command === "job-runners") {
+        setIsExecuting(true);
+        try {
+          const results = await fetchJobResults(session.validatorUrl, args[0]);
+          const runnerLines = results.results.map((result) => `  ${result.runner}`);
+          addMessage(
+            "output",
+            runnerLines.length > 0
+              ? [`Job ${results.job_id}`, "", "  Observed runners:", ...runnerLines].join("\n")
+              : `Job ${results.job_id}\n\n  No runner results yet.`
+          );
+        } catch (err: unknown) {
+          addMessage("error", `Failed to fetch job runners: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
       // init has special handling (extract wallet, replace next steps)
       if (command === "init") {
         setIsExecuting(true);
@@ -418,6 +743,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               dashboardUrl: freshConfig.dashboardUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
               actors: freshConfig.actors,
+              runnerPreferences: freshConfig.runnerPreferences,
             });
             setProjectReady(true);
           } else if (existsSync(join(process.cwd(), ".cowboy"))) {
@@ -432,7 +758,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             " Next step deploy your first Actor:",
             "",
             "   # Deploy to dev validator",
-            "   actor deploy actors/hello/main.py",
+            "   /actor deploy actors/hello/main.py",
           ].join("\n");
 
           addMessage("output", cleaned + nextSteps);
@@ -479,6 +805,70 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setIsExecuting(false);
       }
     },
+    [session, addMessage, updateRunnerPrefs]
+  );
+
+  const handlePromptSubmit = useCallback(
+    async (prompt: string) => {
+      setIsExecuting(true);
+      try {
+        const runners = await fetchActiveRunners(session.validatorUrl);
+        const selection = chooseRunnerRoute(prompt, runners, session.runnerPreferences);
+
+        if (selection.selected) {
+          addMessage(
+            "system",
+            [
+              `AI route: ${selection.route} runner profile`,
+              `Runner: ${selection.selected.address}`,
+              "Selection is advisory until capability-aware dispatch lands in the node.",
+            ].join("\n")
+          );
+        } else {
+          addMessage(
+            "system",
+            "AI route: no LLM runner preference resolved. Submitting with chain-side dispatch only."
+          );
+        }
+
+        const submitted = await submitLlmJob(prompt, session.validatorUrl, session.walletAddress);
+        addMessage("system", `Prompt submitted.\n  Tx: ${submitted.txHash}`);
+
+        const jobId = await waitForJobId(session.validatorUrl, submitted.txHash);
+        if (!jobId) {
+          addMessage(
+            "output",
+            [
+              "AI job submitted, but the job ID is not available yet.",
+              `Tx: ${submitted.txHash}`,
+              "Use /job status once the receipt lands.",
+            ].join("\n")
+          );
+          return;
+        }
+
+        addMessage("system", `Job ID: ${jobId}`);
+        const resolved = await waitForLlmJobResult(session.validatorUrl, jobId);
+        if (resolved.data == null) {
+          addMessage(
+            "output",
+            [
+              "AI job is still running.",
+              `Job: ${jobId}`,
+              `Status: ${resolved.status}`,
+              "Use /job status, /job results, or /job verified to inspect it later.",
+            ].join("\n")
+          );
+          return;
+        }
+
+        addMessage("output", stringifyResultData(resolved.data));
+      } catch (err: unknown) {
+        addMessage("error", `AI prompt failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setIsExecuting(false);
+      }
+    },
     [session, addMessage]
   );
 
@@ -516,7 +906,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
         case "wizard":
           if (!projectReady) {
-            addMessage("error", "No project initialized. Run init <local|dev> first.");
+            addMessage("error", "No project initialized. Run /init <local|dev> first.");
             break;
           }
           setActiveWizard(result.wizard);
@@ -524,14 +914,22 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
         case "execute":
           if (!projectReady && result.command !== "init") {
-            addMessage("error", "No project initialized. Run init <local|dev> first.");
+            addMessage("error", "No project initialized. Run /init <local|dev> first.");
             break;
           }
           await executeCommand(result.command, result.args);
           break;
+
+        case "prompt":
+          if (!projectReady) {
+            addMessage("error", "No project initialized. Run /init <local|dev> first.");
+            break;
+          }
+          await handlePromptSubmit(result.text);
+          break;
       }
     },
-    [isExecuting, exit, addMessage, executeCommand]
+    [isExecuting, exit, addMessage, executeCommand, handlePromptSubmit, projectReady]
   );
 
   const handleHistoryUp = useCallback(() => {
@@ -567,7 +965,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const handleTokenLaunch = useCallback(
     async (args: string[]) => {
       setActiveWizard(null);
-      addMessage("command", `token create ${args.join(" ")}`);
+      addMessage("command", `/token create ${args.join(" ")}`);
       setIsExecuting(true);
       try {
         const cowboyArgs = commandToCowboyArgs("token-create", args);
@@ -647,6 +1045,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         hasKey={projectReady}
         walletAddress={session.walletAddress}
         cowboyVersion={cowboyVersion}
+        runnerPreferences={session.runnerPreferences}
       />
     </Box>
   );

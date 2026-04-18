@@ -3,11 +3,18 @@ export interface ActorEntry {
   label: string;
 }
 
+export interface RunnerPreferences {
+  primaryRunner: string | null;
+  helperRunner: string | null;
+  smallPromptRouting: boolean;
+}
+
 export interface ProjectConfig {
   validatorUrl: string;
   dashboardUrl: string | null;
   walletAddress: string | null;
   actors: ActorEntry[];
+  runnerPreferences: RunnerPreferences;
 }
 
 export interface SessionState {
@@ -15,6 +22,7 @@ export interface SessionState {
   dashboardUrl: string | null;
   walletAddress: string | null;
   actors: ActorEntry[];
+  runnerPreferences: RunnerPreferences;
 }
 
 export interface ConsoleMessage {
@@ -45,5 +53,6 @@ export type CommandResult =
   | { type: "error"; text: string }
   | { type: "quit" }
   | { type: "clear" }
+  | { type: "prompt"; text: string }
   | { type: "execute"; command: string; args: string[] }
   | { type: "wizard"; wizard: "token-launch" };
