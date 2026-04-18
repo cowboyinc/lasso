@@ -42,10 +42,14 @@ export interface LineEditorProps extends EditorBuffer {
   onCancel?: () => void;
   onHistoryUp?: () => void;
   onHistoryDown?: () => void;
+  onSuggestionUp?: () => void;
+  onSuggestionDown?: () => void;
+  onSuggestionAccept?: () => void;
   onActivity?: () => void;
   placeholder?: string;
   mask?: string;
   isDisabled?: boolean;
+  isSuggestionNavigationActive?: boolean;
 }
 
 export type CommandResult =

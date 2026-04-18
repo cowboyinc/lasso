@@ -12,10 +12,14 @@ export function LineEditor({
   onCancel,
   onHistoryUp,
   onHistoryDown,
+  onSuggestionUp,
+  onSuggestionDown,
+  onSuggestionAccept,
   onActivity,
   placeholder,
   mask,
   isDisabled,
+  isSuggestionNavigationActive,
 }: LineEditorProps) {
   const { setRawMode, internal_eventEmitter } = useStdin();
 
@@ -44,6 +48,11 @@ export function LineEditor({
       }
 
       if (key.return || input === "\r" || input === "\n") {
+        if (isSuggestionNavigationActive && onSuggestionAccept) {
+          onActivity?.();
+          onSuggestionAccept();
+          return;
+        }
         onSubmit(value);
         return;
       }
@@ -54,12 +63,22 @@ export function LineEditor({
       }
 
       if (key.upArrow && onHistoryUp) {
+        if (isSuggestionNavigationActive && onSuggestionUp) {
+          onActivity?.();
+          onSuggestionUp();
+          return;
+        }
         onActivity?.();
         onHistoryUp();
         return;
       }
 
       if (key.downArrow && onHistoryDown) {
+        if (isSuggestionNavigationActive && onSuggestionDown) {
+          onActivity?.();
+          onSuggestionDown();
+          return;
+        }
         onActivity?.();
         onHistoryDown();
         return;
@@ -98,7 +117,11 @@ export function LineEditor({
     onHistoryDown,
     onHistoryUp,
     onInterrupt,
+    onSuggestionAccept,
+    onSuggestionDown,
+    onSuggestionUp,
     onSubmit,
+    isSuggestionNavigationActive,
     value,
   ]);
 
