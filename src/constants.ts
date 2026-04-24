@@ -13,10 +13,8 @@ export const LOGO_TEXT = [
   "",
   `  Console v${VERSION}`,
   "",
-  "  Type init to set your private key",
-  "  Type deploy actor <file> to deploy an actor",
-  "  Type help for all commands",
-  "  Type exit to quit",
-  "",
+  "  /help for commands, or describe what you want to build",
+  "  /actor deploy <file>  /runner list  /token launch",
+  "  /exit to quit",
   "",
 ].join("\n");

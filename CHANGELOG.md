@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0] - 2026-04-24
+
+### Added
+- AI Actor Builder: plain text prompts now stream directly to runner's vLLM endpoint (no on-chain job submission)
+- Multi-turn conversation: AI builder maintains conversation history across prompts, cleared on /clear
+- Auto file writing: generated actor code is extracted and written to actors/<name>/main.py with dispatch shim
+- Streaming display: LLM response streams token-by-token in the terminal
+- runner_url config field in .cowboy/config.json for direct vLLM access
+- System prompt with full Cowboy SDK reference (ported from dashboard actor-builder)
+- Actor extractor with dispatch shim injection (ported from dashboard)
+- Status bar shows AI builder status (on/off based on runner_url)
+
+### Changed
+- Plain text input no longer submits on-chain LLM jobs; calls runner directly via OpenAI-compatible API
+- Status bar simplified: AI routing replaced with on/off indicator
+
 ## [0.1.4] - 2026-03-30
 
 ### Added
