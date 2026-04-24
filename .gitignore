@@ -8,3 +8,4 @@ build/
 actors/
 cowboy.toml
 lasso
+lasso-ai

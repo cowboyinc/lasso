@@ -115,12 +115,7 @@ export function InputArea({
             </Box>
           ))}
         </Box>
-      ) : (
-        <Box flexDirection="column" paddingX={1}>
-          <Text dimColor>{">> Slash commands start with / · Plain text submits an AI job · /exit quits"}</Text>
-          <Text dimColor>{"   Try: /runner list  /actor deploy actors/hello/main.py  build me an escrow actor with retries"}</Text>
-        </Box>
-      )}
+      ) : null}
     </Box>
   );
 }

@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: ProjectConfig = {
   validatorUrl: "http://localhost:4000",
   dashboardUrl: null,
   walletAddress: null,
+  runnerUrl: null,
   actors: [],
   runnerPreferences: {
     primaryRunner: null,

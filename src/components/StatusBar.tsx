@@ -9,14 +9,13 @@ interface StatusBarProps {
   walletAddress: string | null;
   cowboyVersion: string | null;
   runnerPreferences: RunnerPreferences;
+  runnerUrl: string | null;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
-  const shortRunner = (value: string | null) =>
-    value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "auto";
 
   return (
     <Box paddingX={1} justifyContent="space-between">
@@ -31,9 +30,7 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, 
           </>
         )}
         {"  "}|{"  "}
-        AI: <Text color="magenta">P {shortRunner(runnerPreferences.primaryRunner)}</Text>
-        {" / "}
-        <Text color="magenta">H {shortRunner(runnerPreferences.helperRunner)}</Text>
+        AI: <Text color={runnerUrl ? "green" : "red"}>{runnerUrl ? "on" : "off"}</Text>
       </Text>
       <Text dimColor>
         {cowboyVersion && <>cli v{cowboyVersion}{"  "}|{"  "}</>}
