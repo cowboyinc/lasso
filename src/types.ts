@@ -13,6 +13,7 @@ export interface ProjectConfig {
   validatorUrl: string;
   dashboardUrl: string | null;
   walletAddress: string | null;
+  runnerUrl: string | null;
   actors: ActorEntry[];
   runnerPreferences: RunnerPreferences;
 }
@@ -21,8 +22,10 @@ export interface SessionState {
   validatorUrl: string;
   dashboardUrl: string | null;
   walletAddress: string | null;
+  runnerUrl: string | null;
   actors: ActorEntry[];
   runnerPreferences: RunnerPreferences;
+  aiHistory: { role: "user" | "assistant"; content: string }[];
 }
 
 export interface ConsoleMessage {

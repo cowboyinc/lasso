@@ -96,6 +96,7 @@ export function loadProjectConfig(): ProjectConfig | null {
       validatorUrl: normalizeEndpointUrl(typeof target.rpc_url === "string" ? target.rpc_url : DEFAULT_RPC_URL) ?? DEFAULT_RPC_URL,
       dashboardUrl: normalizeEndpointUrl(typeof target.dashboard_url === "string" ? target.dashboard_url : null),
       walletAddress: typeof target.wallet_address === "string" ? target.wallet_address : null,
+      runnerUrl: normalizeEndpointUrl(typeof target.runner_url === "string" ? target.runner_url : null),
       actors: normalizeActors(target.actors),
       runnerPreferences: normalizeRunnerPreferences(target.lasso),
     };

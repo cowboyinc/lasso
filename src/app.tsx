@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { Box, Static, useApp } from "ink";
 import { Header } from "./components/Header.js";
 import { Message } from "./components/Message.js";
@@ -26,10 +26,14 @@ import {
 } from "./executor.js";
 import type { ActorInfo, RunnerInfo } from "./executor.js";
 import { loadProjectConfig, saveActors, saveRunnerPreferences } from "./config.js";
-import { basename, dirname } from "node:path";
+import { basename } from "node:path";
 import { createEditorState, shouldExitOnInterrupt } from "./editor-state.js";
 import { TokenLaunchWizard } from "./components/TokenLaunchWizard.js";
 import type { ActorEntry, ProjectConfig, ConsoleMessage, SessionState, EditorBuffer, RunnerPreferences } from "./types.js";
+import { streamChat, trimMessages, discoverModel } from "./llm-client.js";
+import type { ChatMessage } from "./llm-client.js";
+import { ACTOR_BUILDER_SYSTEM_PROMPT } from "./prompts/actor-builder.js";
+import { extractActors } from "./actor-extractor.js";
 
 /** Strip ANSI escapes and control characters from untrusted strings. */
 function sanitize(s: string): string {
@@ -405,9 +409,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     validatorUrl: initialConfig.validatorUrl,
     dashboardUrl: initialConfig.dashboardUrl,
     walletAddress: initialConfig.walletAddress,
+    runnerUrl: initialConfig.runnerUrl,
     actors: initialConfig.actors,
     runnerPreferences: initialConfig.runnerPreferences,
+    aiHistory: [],
   });
+  const [streamingText, setStreamingText] = useState("");
   const [messages, setMessages] = useState<IndexedMessage[]>([]);
   const nextIdRef = useRef(0);
   const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
@@ -438,7 +445,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     }
     addMessage(
       "system",
-      "Slash commands start with /. Plain text submits an AI job to the runner network."
+      "Slash commands start with /. Plain text starts the AI actor builder."
     );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -742,8 +749,10 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               validatorUrl: freshConfig.validatorUrl,
               dashboardUrl: freshConfig.dashboardUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
+              runnerUrl: freshConfig.runnerUrl,
               actors: freshConfig.actors,
               runnerPreferences: freshConfig.runnerPreferences,
+              aiHistory: [],
             });
             setProjectReady(true);
           } else if (existsSync(join(process.cwd(), ".cowboy"))) {
@@ -810,63 +819,100 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
+      if (!session.runnerUrl) {
+        addMessage(
+          "error",
+          "No runner URL configured. Add runner_url to .cowboy/config.json or use /init."
+        );
+        return;
+      }
+
       setIsExecuting(true);
+      setStreamingText("");
+
       try {
-        const runners = await fetchActiveRunners(session.validatorUrl);
-        const selection = chooseRunnerRoute(prompt, runners, session.runnerPreferences);
+        // Discover model on first call
+        let model = "cowboy-actor";
+        const discovered = await discoverModel(session.runnerUrl);
+        if (discovered) model = discovered;
 
-        if (selection.selected) {
-          addMessage(
-            "system",
-            [
-              `AI route: ${selection.route} runner profile`,
-              `Runner: ${selection.selected.address}`,
-              "Selection is advisory until capability-aware dispatch lands in the node.",
-            ].join("\n")
-          );
-        } else {
-          addMessage(
-            "system",
-            "AI route: no LLM runner preference resolved. Submitting with chain-side dispatch only."
-          );
-        }
+        // Build conversation with history
+        const conversationHistory: ChatMessage[] = [
+          ...session.aiHistory,
+          { role: "user", content: prompt },
+        ];
 
-        const submitted = await submitLlmJob(prompt, session.validatorUrl, session.walletAddress);
-        addMessage("system", `Prompt submitted.\n  Tx: ${submitted.txHash}`);
+        const { messages: trimmedMessages, maxOutputTokens } = trimMessages(
+          ACTOR_BUILDER_SYSTEM_PROMPT,
+          conversationHistory
+        );
 
-        const jobId = await waitForJobId(session.validatorUrl, submitted.txHash);
-        if (!jobId) {
-          addMessage(
-            "output",
-            [
-              "AI job submitted, but the job ID is not available yet.",
-              `Tx: ${submitted.txHash}`,
-              "Use /job status once the receipt lands.",
-            ].join("\n")
-          );
+        addMessage("system", `AI builder (${model})`);
+
+        // Stream the response
+        const fullResponse = await streamChat(
+          session.runnerUrl,
+          model,
+          trimmedMessages,
+          maxOutputTokens,
+          {
+            onToken: (token) => {
+              setStreamingText((prev) => prev + token);
+            },
+            onDone: () => {
+              setStreamingText("");
+            },
+            onError: (error) => {
+              addMessage("error", error);
+              setStreamingText("");
+            },
+          }
+        );
+
+        if (!fullResponse) {
           return;
         }
 
-        addMessage("system", `Job ID: ${jobId}`);
-        const resolved = await waitForLlmJobResult(session.validatorUrl, jobId);
-        if (resolved.data == null) {
-          addMessage(
-            "output",
-            [
-              "AI job is still running.",
-              `Job: ${jobId}`,
-              `Status: ${resolved.status}`,
-              "Use /job status, /job results, or /job verified to inspect it later.",
-            ].join("\n")
-          );
-          return;
-        }
+        // Add the full response as a message
+        addMessage("output", fullResponse);
 
-        addMessage("output", stringifyResultData(resolved.data));
+        // Update conversation history
+        setSession((prev) => ({
+          ...prev,
+          aiHistory: [
+            ...prev.aiHistory,
+            { role: "user" as const, content: prompt },
+            { role: "assistant" as const, content: fullResponse },
+          ],
+        }));
+
+        // Extract and write actor files
+        const actors = extractActors(fullResponse);
+        if (actors.length > 0) {
+          for (const actor of actors) {
+            const fullPath = join(process.cwd(), actor.filePath);
+            const dir = dirname(fullPath);
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(fullPath, actor.code + "\n", "utf-8");
+            addMessage(
+              "system",
+              `Wrote ${actor.className ?? "actor"} to ${actor.filePath}`
+            );
+          }
+
+          addMessage(
+            "system",
+            `Deploy with: /actor deploy ${actors[0].filePath}`
+          );
+        }
       } catch (err: unknown) {
-        addMessage("error", `AI prompt failed: ${err instanceof Error ? err.message : String(err)}`);
+        addMessage(
+          "error",
+          `AI builder failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       } finally {
         setIsExecuting(false);
+        setStreamingText("");
       }
     },
     [session, addMessage]
@@ -898,6 +944,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
         case "clear":
           setMessages([]);
+          setSession((prev) => ({ ...prev, aiHistory: [] }));
           break;
 
         case "quit":
@@ -1018,7 +1065,13 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         }}
       </Static>
 
-      {isExecuting && <ThinkingSpinner />}
+      {isExecuting && (
+        streamingText ? (
+          <Message message={{ role: "output", content: streamingText + " ..." }} />
+        ) : (
+          <ThinkingSpinner />
+        )
+      )}
 
       {activeWizard === "token-launch" ? (
         <TokenLaunchWizard
@@ -1046,6 +1099,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         walletAddress={session.walletAddress}
         cowboyVersion={cowboyVersion}
         runnerPreferences={session.runnerPreferences}
+        runnerUrl={session.runnerUrl}
       />
     </Box>
   );
