@@ -371,6 +371,12 @@ function commandToCowboyArgs(command: string, args: string[]): string[] {
       return ["wallet", "address", ...args];
     case "wallet-balance":
       return ["wallet", "balance", ...args];
+    case "wallet-export":
+      return ["wallet", "export", ...args];
+    case "wallet-import-hex":
+      return ["wallet", "import-hex", ...args];
+    case "wallet-import-mnemonic":
+      return ["wallet", "import-mnemonic", ...args];
     case "token-create":
       return ["token", "create", ...args];
     case "token-transfer":

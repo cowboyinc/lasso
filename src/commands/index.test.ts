@@ -81,3 +81,116 @@ test("slash suggestions are alphabetical and filter by prefix", () => {
     getSlashCommandSuggestions("/n f").some((item) => item.command === "/watchtower new feed")
   );
 });
+
+test("/wallet export maps to cowboy wallet export", () => {
+  assert.deepEqual(parseCommand("/wallet export"), {
+    type: "execute",
+    command: "wallet-export",
+    args: [],
+  });
+
+  assert.deepEqual(parseCommand("/wallet export --key /tmp/k"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--key", "/tmp/k"],
+  });
+});
+
+test("/wallet export passes through --no-prefix as a bare boolean flag", () => {
+  assert.deepEqual(parseCommand("/wallet export --no-prefix"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--no-prefix"],
+  });
+
+  assert.deepEqual(parseCommand("/wallet export --key /tmp/k --no-prefix"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--key", "/tmp/k", "--no-prefix"],
+  });
+});
+
+test("/wallet import --hex maps to wallet-import-hex with optional --output", () => {
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex", "0xabcd"],
+    },
+  );
+
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd --output /tmp/k"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex", "0xabcd", "--output", "/tmp/k"],
+    },
+  );
+});
+
+test("/wallet import --hex passes through --force as a bare boolean flag", () => {
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd --force"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex", "0xabcd", "--force"],
+    },
+  );
+
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd --output /tmp/k --force"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex", "0xabcd", "--output", "/tmp/k", "--force"],
+    },
+  );
+});
+
+test("/wallet import --mnemonic maps to wallet-import-mnemonic with optional flags", () => {
+  assert.deepEqual(
+    parseCommand('/wallet import --mnemonic "abandon abandon about"'),
+    {
+      type: "execute",
+      command: "wallet-import-mnemonic",
+      args: ["--mnemonic", "abandon abandon about"],
+    },
+  );
+
+  assert.deepEqual(
+    parseCommand(
+      '/wallet import --mnemonic "abandon abandon about" --output /tmp/k --index 3',
+    ),
+    {
+      type: "execute",
+      command: "wallet-import-mnemonic",
+      args: ["--mnemonic", "abandon abandon about", "--output", "/tmp/k", "--index", "3"],
+    },
+  );
+});
+
+test("/wallet import without --hex or --mnemonic returns a usage error", () => {
+  const result = parseCommand("/wallet import");
+  assert.equal(result.type, "error");
+  assert.match(result.text, /--hex/);
+  assert.match(result.text, /--mnemonic/);
+});
+
+test("/wallet import with both --hex and --mnemonic returns an error", () => {
+  const result = parseCommand(
+    '/wallet import --hex 0xabcd --mnemonic "abandon abandon about"',
+  );
+  assert.equal(result.type, "error");
+  assert.match(result.text, /not both/);
+});
+
+test("/wallet export and /wallet import appear in slash suggestions", () => {
+  const walletSuggestions = getSlashCommandSuggestions("/wallet").map(
+    (item) => item.command,
+  );
+  assert.ok(walletSuggestions.includes("/wallet export"));
+  assert.ok(walletSuggestions.includes("/wallet import"));
+});
