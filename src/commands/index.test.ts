@@ -81,3 +81,123 @@ test("slash suggestions are alphabetical and filter by prefix", () => {
     getSlashCommandSuggestions("/n f").some((item) => item.command === "/watchtower new feed")
   );
 });
+
+test("/wallet export maps to cowboy wallet export", () => {
+  assert.deepEqual(parseCommand("/wallet export"), {
+    type: "execute",
+    command: "wallet-export",
+    args: [],
+  });
+
+  assert.deepEqual(parseCommand("/wallet export --key /tmp/k"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--key", "/tmp/k"],
+  });
+});
+
+test("/wallet export passes through --no-prefix as a bare boolean flag", () => {
+  assert.deepEqual(parseCommand("/wallet export --no-prefix"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--no-prefix"],
+  });
+
+  assert.deepEqual(parseCommand("/wallet export --key /tmp/k --no-prefix"), {
+    type: "execute",
+    command: "wallet-export",
+    args: ["--key", "/tmp/k", "--no-prefix"],
+  });
+});
+
+test("/wallet import --hex routes the secret through stdin (not argv)", () => {
+  // The wrapper rewrites the user-facing `--hex <hex>` into the cowboy CLI's
+  // `--hex-file -` form and stashes the secret on the `stdin` channel of the
+  // result. Argv-based delivery would expose the key via `ps` /
+  // `/proc/<pid>/cmdline` for the duration of the subprocess.
+  assert.deepEqual(parseCommand("/wallet import --hex 0xabcd"), {
+    type: "execute",
+    command: "wallet-import-hex",
+    args: ["--hex-file", "-"],
+    stdin: "0xabcd",
+  });
+
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd --output /tmp/k"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex-file", "-", "--output", "/tmp/k"],
+      stdin: "0xabcd",
+    },
+  );
+});
+
+test("/wallet import --hex passes through --force as a bare boolean flag", () => {
+  assert.deepEqual(parseCommand("/wallet import --hex 0xabcd --force"), {
+    type: "execute",
+    command: "wallet-import-hex",
+    args: ["--hex-file", "-", "--force"],
+    stdin: "0xabcd",
+  });
+
+  assert.deepEqual(
+    parseCommand("/wallet import --hex 0xabcd --output /tmp/k --force"),
+    {
+      type: "execute",
+      command: "wallet-import-hex",
+      args: ["--hex-file", "-", "--output", "/tmp/k", "--force"],
+      stdin: "0xabcd",
+    },
+  );
+});
+
+test("/wallet import --mnemonic routes the phrase through stdin (not argv)", () => {
+  // Same argv-leak avoidance as the hex branch: the user-facing
+  // `--mnemonic <phrase>` becomes cowboy's `--mnemonic-file -` plus a stdin
+  // payload that is never visible in `ps` output.
+  assert.deepEqual(
+    parseCommand('/wallet import --mnemonic "abandon abandon about"'),
+    {
+      type: "execute",
+      command: "wallet-import-mnemonic",
+      args: ["--mnemonic-file", "-"],
+      stdin: "abandon abandon about",
+    },
+  );
+
+  assert.deepEqual(
+    parseCommand(
+      '/wallet import --mnemonic "abandon abandon about" --output /tmp/k --index 3',
+    ),
+    {
+      type: "execute",
+      command: "wallet-import-mnemonic",
+      args: ["--mnemonic-file", "-", "--output", "/tmp/k", "--index", "3"],
+      stdin: "abandon abandon about",
+    },
+  );
+});
+
+test("/wallet import without --hex or --mnemonic returns a usage error", () => {
+  const result = parseCommand("/wallet import");
+  assert.equal(result.type, "error");
+  assert.match(result.text, /--hex/);
+  assert.match(result.text, /--mnemonic/);
+});
+
+test("/wallet import with both --hex and --mnemonic returns an error", () => {
+  const result = parseCommand(
+    '/wallet import --hex 0xabcd --mnemonic "abandon abandon about"',
+  );
+  assert.equal(result.type, "error");
+  assert.match(result.text, /not both/);
+});
+
+test("/wallet export and /wallet import appear in slash suggestions", () => {
+  const walletSuggestions = getSlashCommandSuggestions("/wallet").map(
+    (item) => item.command,
+  );
+  assert.ok(walletSuggestions.includes("/wallet export"));
+  assert.ok(walletSuggestions.includes("/wallet import"));
+});

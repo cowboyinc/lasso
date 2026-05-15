@@ -41,6 +41,8 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/wallet address", description: "Show wallet address" },
   { command: "/wallet balance", description: "Show wallet balance" },
   { command: "/wallet create", description: "Generate a new keypair" },
+  { command: "/wallet export", description: "Export the private key as hex" },
+  { command: "/wallet import", description: "Import a wallet from hex or mnemonic" },
   { command: "/watchtower feed", description: "Publish to or inspect a feed" },
   { command: "/watchtower feeds", description: "List feeds" },
   { command: "/watchtower list", description: "List watchtower resources" },
@@ -453,6 +455,66 @@ function parseWalletCommand(parts: string[]): CommandResult {
       return { type: "execute", command: "wallet-balance", args };
     }
 
+    case "export": {
+      // parseFlags expects every `--flag` to be followed by a value, so pre-strip
+      // the bare boolean flag before delegating.
+      const noPrefix = rest.includes("--no-prefix");
+      const { flags } = parseFlags(rest.filter((p) => p !== "--no-prefix"));
+      const args: string[] = [];
+      if (flags.key) args.push("--key", flags.key);
+      if (noPrefix) args.push("--no-prefix");
+      return { type: "execute", command: "wallet-export", args };
+    }
+
+    case "import": {
+      // parseFlags expects every `--flag` to be followed by a value, so pre-strip
+      // the bare boolean flag before delegating. `--force` only applies to the
+      // hex flow (the underlying `wallet import-mnemonic` has no overwrite
+      // override and simply refuses if the output exists).
+      const force = rest.includes("--force");
+      const { flags } = parseFlags(rest.filter((p) => p !== "--force"));
+      if (flags.hex && flags.mnemonic) {
+        return {
+          type: "error",
+          text: "Pass either --hex or --mnemonic, not both.",
+        };
+      }
+      if (flags.hex) {
+        // Route the secret through the cowboy CLI's --hex-file path with `-`
+        // (stdin) instead of placing it on argv. Argv is readable by any local
+        // process via `ps` / `/proc/<pid>/cmdline` for the duration of the
+        // subprocess, which is a real exposure vector on shared hosts and CI.
+        const args = ["--hex-file", "-"];
+        if (flags.output) args.push("--output", flags.output);
+        if (force) args.push("--force");
+        return {
+          type: "execute",
+          command: "wallet-import-hex",
+          args,
+          stdin: flags.hex,
+        };
+      }
+      if (flags.mnemonic) {
+        // Same rationale as the hex branch — pipe the phrase via stdin so it
+        // never appears in argv.
+        const args = ["--mnemonic-file", "-"];
+        if (flags.output) args.push("--output", flags.output);
+        if (flags.index) args.push("--index", flags.index);
+        return {
+          type: "execute",
+          command: "wallet-import-mnemonic",
+          args,
+          stdin: flags.mnemonic,
+        };
+      }
+      return {
+        type: "error",
+        text:
+          "Usage: /wallet import --hex <hex> [--output <path>] [--force]\n" +
+          '       /wallet import --mnemonic "<phrase>" [--output <path>] [--index <n>]',
+      };
+    }
+
     default:
       return {
         type: "error",
@@ -658,6 +720,9 @@ function handleHelp(): CommandResult {
     "    /wallet create [--output <path>]        Generate a new keypair",
     "    /wallet address [--key <path>]          Show wallet address",
     "    /wallet balance [--key <path>]          Show wallet balance",
+    "    /wallet export [--key <path>] [--no-prefix]   Export the private key as hex",
+    '    /wallet import --hex <hex> [--output <path>] [--force]',
+    '    /wallet import --mnemonic "<phrase>" [--output <path>] [--index <n>]',
     "",
     "  Actor:",
     "    /actor deploy <file.py>                 Deploy an actor to the chain",
