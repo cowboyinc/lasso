@@ -5,10 +5,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export function executeCowboyAsync(
-  args: string[]
+  args: string[],
+  stdin?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
+    // Default stdio (all three piped) lets us write the optional `stdin`
+    // payload to the child out-of-band, instead of placing the secret on argv
+    // where `ps` / `/proc/<pid>/cmdline` would expose it. For commands that
+    // do not consume stdin we simply close the pipe without writing.
     const child = spawn("cowboy", args);
+
+    if (stdin !== undefined) {
+      child.stdin.end(stdin);
+    } else {
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";
@@ -33,11 +44,12 @@ export function executeCowboyAsync(
 
 export async function executeCowboy(
   cowboyArgs: string[],
-  validatorUrl: string
+  validatorUrl: string,
+  stdin?: string,
 ): Promise<string> {
   try {
     const args = ["--indexer-url", validatorUrl, ...cowboyArgs];
-    const result = await executeCowboyAsync(args);
+    const result = await executeCowboyAsync(args, stdin);
 
     let output = result.stdout;
     if (result.stderr) {
