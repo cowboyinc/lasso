@@ -110,53 +110,59 @@ test("/wallet export passes through --no-prefix as a bare boolean flag", () => {
   });
 });
 
-test("/wallet import --hex maps to wallet-import-hex with optional --output", () => {
-  assert.deepEqual(
-    parseCommand("/wallet import --hex 0xabcd"),
-    {
-      type: "execute",
-      command: "wallet-import-hex",
-      args: ["--hex", "0xabcd"],
-    },
-  );
+test("/wallet import --hex routes the secret through stdin (not argv)", () => {
+  // The wrapper rewrites the user-facing `--hex <hex>` into the cowboy CLI's
+  // `--hex-file -` form and stashes the secret on the `stdin` channel of the
+  // result. Argv-based delivery would expose the key via `ps` /
+  // `/proc/<pid>/cmdline` for the duration of the subprocess.
+  assert.deepEqual(parseCommand("/wallet import --hex 0xabcd"), {
+    type: "execute",
+    command: "wallet-import-hex",
+    args: ["--hex-file", "-"],
+    stdin: "0xabcd",
+  });
 
   assert.deepEqual(
     parseCommand("/wallet import --hex 0xabcd --output /tmp/k"),
     {
       type: "execute",
       command: "wallet-import-hex",
-      args: ["--hex", "0xabcd", "--output", "/tmp/k"],
+      args: ["--hex-file", "-", "--output", "/tmp/k"],
+      stdin: "0xabcd",
     },
   );
 });
 
 test("/wallet import --hex passes through --force as a bare boolean flag", () => {
-  assert.deepEqual(
-    parseCommand("/wallet import --hex 0xabcd --force"),
-    {
-      type: "execute",
-      command: "wallet-import-hex",
-      args: ["--hex", "0xabcd", "--force"],
-    },
-  );
+  assert.deepEqual(parseCommand("/wallet import --hex 0xabcd --force"), {
+    type: "execute",
+    command: "wallet-import-hex",
+    args: ["--hex-file", "-", "--force"],
+    stdin: "0xabcd",
+  });
 
   assert.deepEqual(
     parseCommand("/wallet import --hex 0xabcd --output /tmp/k --force"),
     {
       type: "execute",
       command: "wallet-import-hex",
-      args: ["--hex", "0xabcd", "--output", "/tmp/k", "--force"],
+      args: ["--hex-file", "-", "--output", "/tmp/k", "--force"],
+      stdin: "0xabcd",
     },
   );
 });
 
-test("/wallet import --mnemonic maps to wallet-import-mnemonic with optional flags", () => {
+test("/wallet import --mnemonic routes the phrase through stdin (not argv)", () => {
+  // Same argv-leak avoidance as the hex branch: the user-facing
+  // `--mnemonic <phrase>` becomes cowboy's `--mnemonic-file -` plus a stdin
+  // payload that is never visible in `ps` output.
   assert.deepEqual(
     parseCommand('/wallet import --mnemonic "abandon abandon about"'),
     {
       type: "execute",
       command: "wallet-import-mnemonic",
-      args: ["--mnemonic", "abandon abandon about"],
+      args: ["--mnemonic-file", "-"],
+      stdin: "abandon abandon about",
     },
   );
 
@@ -167,7 +173,8 @@ test("/wallet import --mnemonic maps to wallet-import-mnemonic with optional fla
     {
       type: "execute",
       command: "wallet-import-mnemonic",
-      args: ["--mnemonic", "abandon abandon about", "--output", "/tmp/k", "--index", "3"],
+      args: ["--mnemonic-file", "-", "--output", "/tmp/k", "--index", "3"],
+      stdin: "abandon abandon about",
     },
   );
 });

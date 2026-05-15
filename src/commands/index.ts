@@ -480,19 +480,31 @@ function parseWalletCommand(parts: string[]): CommandResult {
         };
       }
       if (flags.hex) {
-        const args = ["--hex", flags.hex];
+        // Route the secret through the cowboy CLI's --hex-file path with `-`
+        // (stdin) instead of placing it on argv. Argv is readable by any local
+        // process via `ps` / `/proc/<pid>/cmdline` for the duration of the
+        // subprocess, which is a real exposure vector on shared hosts and CI.
+        const args = ["--hex-file", "-"];
         if (flags.output) args.push("--output", flags.output);
         if (force) args.push("--force");
-        return { type: "execute", command: "wallet-import-hex", args };
+        return {
+          type: "execute",
+          command: "wallet-import-hex",
+          args,
+          stdin: flags.hex,
+        };
       }
       if (flags.mnemonic) {
-        const args = ["--mnemonic", flags.mnemonic];
+        // Same rationale as the hex branch — pipe the phrase via stdin so it
+        // never appears in argv.
+        const args = ["--mnemonic-file", "-"];
         if (flags.output) args.push("--output", flags.output);
         if (flags.index) args.push("--index", flags.index);
         return {
           type: "execute",
           command: "wallet-import-mnemonic",
           args,
+          stdin: flags.mnemonic,
         };
       }
       return {

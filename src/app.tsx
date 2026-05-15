@@ -480,7 +480,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   }, []);
 
   const executeCommand = useCallback(
-    async (command: string, args: string[]) => {
+    async (command: string, args: string[], stdin?: string) => {
       // deploy-actor has special handling (salt generation + actor address extraction)
       if (command === "deploy-actor") {
         setIsExecuting(true);
@@ -808,7 +808,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         const cowboyArgs = commandToCowboyArgs(command, args);
         const result = await executeCowboy(
           cowboyArgs,
-          session.validatorUrl
+          session.validatorUrl,
+          stdin,
         );
         addMessage("output", result);
       } catch (err: unknown) {
@@ -970,7 +971,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             addMessage("error", "No project initialized. Run /init <local|dev> first.");
             break;
           }
-          await executeCommand(result.command, result.args);
+          await executeCommand(result.command, result.args, result.stdin);
           break;
 
         case "prompt":

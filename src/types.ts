@@ -61,5 +61,5 @@ export type CommandResult =
   | { type: "quit" }
   | { type: "clear" }
   | { type: "prompt"; text: string }
-  | { type: "execute"; command: string; args: string[] }
+  | { type: "execute"; command: string; args: string[]; stdin?: string }
   | { type: "wizard"; wizard: "token-launch" };
