@@ -9,7 +9,6 @@ on:
       - main
 
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -69,6 +68,9 @@ jobs:
     name: Build Lasso Binaries
     if: github.event_name == 'push'
     needs: [typecheck, test]
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
 
     outputs:
