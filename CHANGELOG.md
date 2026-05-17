@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1] - 2026-05-17
+
+### Added
+- CI: `test` job runs `npm test` on PRs (typecheck + test) and gates the
+  `build` job on main pushes (PR #15). Build step is now
+  `if: github.event_name == 'push'` so PR runs don't touch S3 or use
+  deploy secrets.
+
+### Fixed
+- `npm test` script: was using shell-expanded `src/**/*.test.ts` glob
+  that mis-matched on the CI environment; replaced with the
+  vitest-default pattern so all tests are discovered.
+
 ## [0.2.0] - 2026-04-24
 
 ### Added
