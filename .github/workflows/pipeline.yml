@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -14,7 +16,7 @@ env:
 
 jobs:
   # ===========================================================================
-  # TYPECHECK - Runs on all pushes to main
+  # TYPECHECK - Runs on push to main and pull_request to main
   # ===========================================================================
   typecheck:
     name: Typecheck
@@ -37,11 +39,38 @@ jobs:
         run: npm run typecheck
 
   # ===========================================================================
-  # BUILD - Cross-compiles Bun binaries and uploads to S3
+  # TEST - Runs on push to main and pull_request to main
+  # ===========================================================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+  # ===========================================================================
+  # BUILD - Cross-compiles Bun binaries and uploads to S3 (push to main only)
   # ===========================================================================
   build:
     name: Build Lasso Binaries
-    needs: [typecheck]
+    if: github.event_name == 'push'
+    needs: [typecheck, test]
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
 
     outputs:

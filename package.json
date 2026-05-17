@@ -10,7 +10,7 @@
     "dev": "tsx src/cli.tsx",
     "build": "tsup src/cli.tsx --format esm --dts",
     "start": "node dist/cli.js",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "find src -name '*.test.ts' -print0 | xargs -0 node --import tsx --test",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
