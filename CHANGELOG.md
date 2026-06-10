@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.3] - 2026-06-10
+
+### Fixed
+- `/init` no longer appends "Next step deploy your first Actor" to CLI
+  errors (e.g. cowboy CLI missing from PATH); failures now render as errors
+
+### Changed
+- Homebrew: the lasso formula now depends on `cowboyinc/lasso/cowboy`, so
+  `brew install cowboyinc/lasso/lasso` also installs the cowboy CLI
+  (binaries from github.com/cowboyinc/cowboy-cli)
+
 ## [0.3.2] - 2026-06-10
 
 ### Changed
