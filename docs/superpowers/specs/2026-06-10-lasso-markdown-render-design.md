@@ -1,14 +1,14 @@
-# Lasso markdown rendering + theme-safe command echo
+# Lasso markdown rendering + theme-safe command echo + AI status fix
 
 **Date:** 2026-06-10
 **Status:** Approved (Logan, 2026-06-10)
-**Goal:** Agent/AI output renders Claude-Code-style markdown in the TUI, and
-command-echo lines are readable on light terminal themes.
+**Goal:** Agent/AI output renders Claude-Code-style markdown in the TUI,
+command-echo lines are readable on light terminal themes, and the status bar's
+AI indicator reflects the new dashboard-agent default.
 
 ## Context
 
-`src/components/Message.tsx` renders four message roles. Two problems surfaced
-in the 0.4.0 smoke test:
+Three problems surfaced in the 0.4.0 smoke test:
 
 1. **Black bars:** the `command` case renders
    `<Text color="gray" backgroundColor="#1a1a1a">` — a hardcoded near-black
@@ -18,6 +18,10 @@ in the 0.4.0 smoke test:
    `` `inline code` ``, and fenced code blocks. Headings (`###`), bullets,
    numbered lists, italics, blockquotes, and rules pass through as raw text —
    the dashboard agent emits all of these.
+3. **`AI: off` while AI works:** `StatusBar.tsx:33` keys the AI indicator
+   solely on `runnerUrl`. After 0.4.0's default flip, the typical config has
+   `dashboardUrl` set and `runnerUrl` unset — AI works via the agent but the
+   status bar shows a red `AI: off`.
 
 Scope decision (Logan): extend the in-house renderer to the CC-style core set.
 No new dependencies (`marked-terminal` rejected: pulls cli-highlight, and its
@@ -89,17 +93,31 @@ the `output` case maps `parseMarkdown(content)` to Ink elements:
 Inline span styles: plain → default; bold → `bold`; italic → `italic`;
 code → `color="cyan"`.
 
-### 4. Ship vehicle
+### 4. AI status indicator (`src/components/StatusBar.tsx`, `src/app.tsx`)
 
-Additional commits on `worktree-agent-backend` → lands in PR #28, plus a
-CHANGELOG 0.4.0 line ("agent output renders markdown; command echo readable on
-light themes").
+`StatusBar` gains a `dashboardUrl: string | null` prop (passed from `app.tsx`
+alongside the existing `runnerUrl`). The indicator shows the active mode
+instead of a bare on/off:
 
-### 5. Testing
+- `dashboardUrl` set → `AI: dashboard` (green)
+- else `runnerUrl` set → `AI: direct` (green)
+- else → `AI: off` (red)
+
+Mode mirrors `handlePromptSubmit`'s routing rule exactly, so the label can't
+disagree with behavior.
+
+### 5. Ship vehicle
+
+Additional commits on `worktree-agent-backend` → lands in PR #28, plus
+CHANGELOG 0.4.0 lines ("agent output renders markdown; command echo readable
+on light themes; AI status shows the active backend mode").
+
+### 6. Testing
 
 - Parser unit tests (`src/markdown.test.ts`): headings, bullets/ordered with
   indent, bold-vs-italic disambiguation, inline code, quote, hr, unclosed
   fence, blank-line collapsing.
 - `make check` green.
 - Visual pass via `npm run dev`: re-ask the dual-gas question; verify headings,
-  bullets, and the command echo on a light theme.
+  bullets, the command echo on a light theme, and `AI: dashboard` in the
+  status bar (then `AI: off` with `"dashboard_url": ""` and no runner).
