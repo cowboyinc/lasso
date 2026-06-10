@@ -823,6 +823,13 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           const cowboyArgs = commandToCowboyArgs(command, args);
           const result = await executeCowboy(cowboyArgs, session.validatorUrl);
 
+          // executeCowboy reports failures as text rather than throwing.
+          // Only treat the run as an init if the CLI actually produced one.
+          if (!/Wallet address:|Created \.cowboy/.test(result)) {
+            addMessage("error", result);
+            return;
+          }
+
           // Re-read project config written by the CLI
           const freshConfig = loadProjectConfig();
           if (freshConfig) {
