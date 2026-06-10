@@ -54,7 +54,8 @@ export interface TextDeltaEvent extends BaseEvent {
   delta: string;
 }
 
-/** Chain-of-thought tokens from a reasoning runner. NOT part of the answer. */
+/** Chain-of-thought tokens from a reasoning runner. NOT part of the answer —
+ *  shown as a transient "Thinking…" affordance, never persisted. */
 export interface ReasoningDeltaEvent extends BaseEvent {
   type: "reasoning_delta";
   iteration: number;
@@ -158,6 +159,16 @@ export async function* parseEventStream(
     }
   } finally {
     reader.releaseLock();
+  }
+
+  // Intentional divergence from the upstream browser client: flush any
+  // unterminated final frame. The server always ends frames with \n\n, but
+  // lasso reads over a real remote connection where truncation can eat the
+  // final separator — without this, a truncated `done` event vanishes.
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = parseFrame(buffer);
+    if (event) yield event;
   }
 }
 

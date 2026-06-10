@@ -53,3 +53,23 @@ test("parseEventStream skips non-data frames, malformed JSON, and CRLF noise", a
   assert.equal(events.length, 1);
   assert.equal((events[0] as { delta: string }).delta, "ok");
 });
+
+test("parseEventStream handles event:+data: two-line frames (actual server format)", async () => {
+  const events = await collect(
+    streamFromChunks([
+      'event: text_delta\ndata: {"type":"text_delta","seq":0,"ts":1,"iteration":0,"delta":"real"}\n\n',
+    ])
+  );
+  assert.equal(events.length, 1);
+  assert.equal((events[0] as { delta: string }).delta, "real");
+});
+
+test("parseEventStream flushes a final frame missing its trailing separator", async () => {
+  const events = await collect(
+    streamFromChunks([
+      'data: {"type":"done","seq":0,"ts":1,"totalIterations":1,"finalAssistantContent":"bye"}',
+    ])
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "done");
+});
