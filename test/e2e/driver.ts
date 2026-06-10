@@ -93,19 +93,43 @@ export function launchLasso(opts?: {
     );
   };
 
-  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+  const pollFor = async (predicate: () => boolean, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await sleep(100);
+    }
+    return false;
+  };
+
+  /** The live editor line is the last prompt-marker line on screen. */
+  const lastPromptLine = () => {
+    const lines = output().split("\n").filter((l) => l.includes("❯"));
+    return lines[lines.length - 1] ?? "";
+  };
 
   const submit = async (command: string) => {
-    for (const ch of command) {
-      pty.write(ch);
-      await sleep(20);
+    // PTY input can drop characters on loaded CI runners (observed:
+    // "/walkthrough" arriving as "/wlkthrough"). Type, verify the live
+    // editor echoes the exact text, and retype after Ctrl+U if not.
+    for (let attempt = 0; ; attempt++) {
+      for (const ch of command) {
+        pty.write(ch);
+        await sleep(30);
+      }
+      if (await pollFor(() => lastPromptLine().includes(command), 4000)) break;
+      if (attempt >= 2) {
+        throw new Error(
+          `Could not type "${command}" intact after ${attempt + 1} attempts\n--- last prompt ---\n${lastPromptLine()}`
+        );
+      }
+      pty.write("\x15"); // Ctrl+U clears the line for a clean retry
+      await sleep(250);
     }
-    // Confirm the editor echoed the full command before continuing.
-    await waitFor(new RegExp(escapeRegex(command)));
-    // Trailing space hides the suggestion picker; Enter then submits
-    // regardless of render timing. parseCommand trims the input.
+    // Trailing space hides the suggestion picker (input is processed in
+    // order), so a single Enter always submits. parseCommand trims.
     pty.write(" ");
-    await sleep(150);
+    await sleep(200);
     pty.write("\r");
   };
 
