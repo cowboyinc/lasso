@@ -944,6 +944,10 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       let streamed = "";
 
       try {
+        // createConversation's firstMessage only seeds the conversation
+        // title server-side — the backend explicitly does NOT persist it as
+        // a chat turn (see dashboard backend conversations.ts) — so sending
+        // the prompt via streamAgentChat below is not a duplicate.
         if (!conversationIdRef.current) {
           conversationIdRef.current = await createConversation(
             dashboardUrl,
@@ -978,11 +982,16 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         });
 
         if (result.error) {
+          // Keep any partial stream for context, then the error banner last.
+          if (streamed.trim()) {
+            addMessage("output", streamed);
+          }
           addMessage("error", `AI builder failed: ${result.error}`);
-        }
-        const finalText = result.finalText ?? streamed;
-        if (finalText.trim()) {
-          addMessage("output", finalText);
+        } else {
+          const finalText = result.finalText ?? streamed;
+          if (finalText.trim()) {
+            addMessage("output", finalText);
+          }
         }
         if (result.wrote.length > 0) {
           addMessage("system", `Deploy with: /actor deploy ${result.wrote[0].filePath}`);
@@ -1266,6 +1275,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (agentAbortRef.current) {
         agentAbortRef.current();
         addMessage("system", "Interrupted.");
+      } else {
+        addMessage("system", "Cannot interrupt — waiting for response.");
       }
       return;
     }
