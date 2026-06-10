@@ -1,6 +1,6 @@
 {
   "name": "lasso",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Cowboy blockchain console",
   "type": "module",
   "bin": {
