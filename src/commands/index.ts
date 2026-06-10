@@ -18,7 +18,10 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/deploy actor", description: "Deploy an actor from the short alias" },
   { command: "/exit", description: "Quit lasso" },
   { command: "/help", description: "Show available commands" },
-  { command: "/init", description: "Initialize a local or dev project environment" },
+  { command: "/docs", description: "Browse bundled Cowboy reference docs" },
+  { command: "/faucet", description: "Request devnet CBY from the faucet" },
+  { command: "/init", description: "Initialize a project on mesa (default) or a local node" },
+  { command: "/walkthrough", description: "Guided tour of how Cowboy works" },
   { command: "/job results", description: "Get raw job results" },
   { command: "/job runners", description: "Show runners observed for a job" },
   { command: "/job status", description: "Check job status" },
@@ -200,11 +203,14 @@ export function parseCommand(input: string): CommandResult {
       return { type: "quit" };
 
     case "init": {
-      const env = parts[1]?.toLowerCase();
-      if (!env || !["dev", "local"].includes(env)) {
-        return { type: "error", text: "Usage: /init <local|dev>" };
+      // Default to mesa, the public devnet. "mesa" is the public name for
+      // what the cowboy CLI calls "dev".
+      const env = parts[1]?.toLowerCase() ?? "mesa";
+      const network = env === "mesa" ? "dev" : env;
+      if (!["dev", "local"].includes(network)) {
+        return { type: "error", text: "Usage: /init [mesa|local]  (defaults to mesa, the public devnet)" };
       }
-      return { type: "execute", command: "init", args: [env] };
+      return { type: "execute", command: "init", args: [network] };
     }
 
     case "deploy": {
@@ -229,6 +235,27 @@ export function parseCommand(input: string): CommandResult {
 
     case "job":
       return parseJobCommand(parts);
+
+    case "faucet": {
+      const address = parts[1];
+      if (address && !/^(0x)?[a-fA-F0-9]{40}$/.test(address)) {
+        return { type: "error", text: `Invalid address: ${address}. Usage: /faucet [address]` };
+      }
+      return { type: "execute", command: "faucet", args: address ? [address] : [] };
+    }
+
+    case "walkthrough": {
+      const lesson = parts[1] ? Number(parts[1]) : null;
+      if (parts[1] && (!Number.isInteger(lesson) || lesson! < 1)) {
+        return { type: "error", text: "Usage: /walkthrough [lesson number]" };
+      }
+      return { type: "walkthrough", lesson };
+    }
+
+    case "docs": {
+      const topic = parts.slice(1).join(" ").toLowerCase() || null;
+      return { type: "docs", topic };
+    }
 
     case "transfer": {
       const { flags } = parseFlags(parts.slice(1));
@@ -710,7 +737,10 @@ function handleHelp(): CommandResult {
     "  Every local command starts with /",
     "",
     "  General:",
-    "    /init <local|dev>                       Initialize project environment",
+    "    /init [mesa|local]                      Initialize project (default: mesa, the public devnet)",
+    "    /walkthrough [n]                        Guided tour of how Cowboy works",
+    "    /docs [topic]                           Browse bundled Cowboy reference docs",
+    "    /faucet [address]                       Request devnet CBY (defaults to your wallet)",
     "    /transfer --to <addr> --amount <cby>   Transfer CBY to an address",
     "    /help                                   Show this help",
     "    /clear                                  Clear the console",

@@ -9,3 +9,4 @@ actors/
 cowboy.toml
 lasso
 lasso-ai
+*.bun-build

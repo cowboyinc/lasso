@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.0] - 2026-06-10
+
+### Added
+- `/walkthrough` — interactive guided tour of how Cowboy works (9 lessons
+  modeled on the erlangcowboydemo), advertised in the launch banner
+- `/docs [topic]` — browse the bundled Cowboy knowledge pack
+- `/faucet [address]` — request devnet CBY via `POST /faucet` (defaults to
+  the session wallet)
+- Auto-fund: wallets with a zero balance get a faucet drip at launch
+- Cowboy knowledge pack (`src/knowledge/`): curated reference sections
+  retrieved into the AI builder's system prompt per request
+- AI builder reads local `actors/*.py` files referenced by path (capped at
+  2 files / 3KB each to respect the 8k context budget)
+- Makefile: `dev`, `build`, `test`, `typecheck`, `check`, `binary`,
+  `binaries` (cross-compile + SHA256SUMS), `install-local`, `release`,
+  `clean`
+- Homebrew distribution: `brew tap cowboyinc/lasso && brew install lasso`
+
+### Changed
+- Default network is now mesa (`https://rpc.mesa.cowboylabs.net`), the
+  public devnet, instead of `http://localhost:4000`
+- `/init` defaults to mesa and accepts `mesa` as an alias for the cowboy
+  CLI's `dev` network; `/init local` unchanged
+- README documents the real `.cowboy/config.json` layout (the old
+  `~/.lasso/config.json` reference was stale)
+
 ## [0.2.1] - 2026-05-17
 
 ### Added
