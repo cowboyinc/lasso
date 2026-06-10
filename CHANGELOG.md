@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.4] - 2026-06-10
+
+### Fixed
+- Init next-step suggests `actors/counter/main.py` — the starter actor init
+  actually creates (was `actors/hello/main.py`, which doesn't exist)
+
 ## [0.3.3] - 2026-06-10
 
 ### Fixed
