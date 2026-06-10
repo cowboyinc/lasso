@@ -64,18 +64,32 @@ function withTempConfig(
   }
 }
 
+test("DEFAULT_DASHBOARD_URL points at the mesa dashboard", () => {
+  assert.equal(DEFAULT_DASHBOARD_URL, "https://dashboard.mesa.cowboylabs.net");
+});
+
 test("dashboard_url defaults to the mesa dashboard when absent", () => {
   withTempConfig({ rpc_url: "https://rpc.mesa.cowboylabs.net" }, () => {
     const config = loadProjectConfig();
     assert.ok(config);
     assert.equal(config.dashboardUrl, DEFAULT_DASHBOARD_URL);
-    assert.equal(DEFAULT_DASHBOARD_URL, "https://dashboard.mesa.cowboylabs.net");
   });
 });
 
 test("dashboard_url empty string opts out (direct-runner mode)", () => {
   withTempConfig(
     { rpc_url: "https://rpc.mesa.cowboylabs.net", dashboard_url: "" },
+    () => {
+      const config = loadProjectConfig();
+      assert.ok(config);
+      assert.equal(config.dashboardUrl, null);
+    }
+  );
+});
+
+test("dashboard_url JSON null opts out too", () => {
+  withTempConfig(
+    { rpc_url: "https://rpc.mesa.cowboylabs.net", dashboard_url: null },
     () => {
       const config = loadProjectConfig();
       assert.ok(config);
