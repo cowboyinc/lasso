@@ -11,7 +11,8 @@
 - `dashboard_url` now defaults to `https://dashboard.mesa.cowboylabs.net`.
   Set `"dashboard_url": ""` in `.cowboy/config.json` to opt out and use the
   direct `runner_url` vLLM path instead.
-- Ctrl+C now cancels an in-flight AI stream.
+- Ctrl+C now cancels an in-flight AI stream (agent path; direct `runner_url`
+  mode still waits for the response to complete).
 
 ### Known gaps
 - Agent actions that need a wallet signature (deploy/transfer) are not yet
