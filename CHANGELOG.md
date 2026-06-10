@@ -15,6 +15,12 @@
   mode still waits for the response to complete).
 - Because `dashboard_url` is now set by default, `/actor list` shows live
   dashboard data for initialized wallets instead of the local-only list.
+- Agent output renders markdown (headings, bullet/numbered lists, italics,
+  quotes, rules — on top of the existing bold/inline-code/code blocks), and
+  the command echo no longer uses a hardcoded dark background that was
+  unreadable on light terminal themes.
+- The status bar AI indicator shows the active backend (`AI: dashboard`,
+  `AI: direct`, or `AI: off`) instead of keying on `runner_url` alone.
 
 ### Known gaps
 - Agent actions that need a wallet signature (deploy/transfer) are not yet

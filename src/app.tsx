@@ -1356,6 +1356,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         cowboyVersion={cowboyVersion}
         runnerPreferences={session.runnerPreferences}
         runnerUrl={session.runnerUrl}
+        dashboardUrl={session.dashboardUrl}
       />
     </Box>
   );
