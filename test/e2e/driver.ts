@@ -6,9 +6,11 @@
  * pattern appears (or rejects on timeout). Ink requires a real TTY for
  * raw-mode input, hence node-pty rather than child_process.
  *
- * Quirk encoded here: the slash-suggestion picker consumes the first
- * Enter as autocomplete when suggestions are visible, so commands are
- * submitted with a double Enter.
+ * Quirk encoded here: the slash-suggestion picker consumes Enter as
+ * autocomplete while suggestions are visible, and whether they are
+ * visible depends on render timing. A trailing space hides the picker
+ * deterministically (input is processed in order), so submit() types
+ * "command + space" and a single Enter always submits.
  */
 import { spawn } from "node-pty";
 import type { IPty } from "node-pty";
@@ -80,7 +82,7 @@ export function launchLasso(opts?: {
 
   const output = () => stripAnsi(buffer);
 
-  const waitFor = async (pattern: RegExp, timeoutMs = 15_000) => {
+  const waitFor = async (pattern: RegExp, timeoutMs = 30_000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (pattern.test(output())) return;
@@ -91,14 +93,19 @@ export function launchLasso(opts?: {
     );
   };
 
+  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+
   const submit = async (command: string) => {
     for (const ch of command) {
       pty.write(ch);
-      await sleep(15);
+      await sleep(20);
     }
-    await sleep(300);
-    pty.write("\r");
-    await sleep(300);
+    // Confirm the editor echoed the full command before continuing.
+    await waitFor(new RegExp(escapeRegex(command)));
+    // Trailing space hides the suggestion picker; Enter then submits
+    // regardless of render timing. parseCommand trims the input.
+    pty.write(" ");
+    await sleep(150);
     pty.write("\r");
   };
 
