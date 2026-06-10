@@ -11,6 +11,7 @@ import { parseCommand } from "./commands/index.js";
 import {
   deployActor,
   executeCowboy,
+  fetchAccountBalance,
   fetchActorDetail,
   detectWalletAddress,
   fetchActiveRunners,
@@ -20,6 +21,7 @@ import {
   fetchJobStatus,
   fetchJobResults,
   fetchJobVerified,
+  requestFaucet,
   submitLlmJob,
   waitForJobId,
   waitForLlmJobResult,
@@ -34,6 +36,15 @@ import { streamChat, trimMessages, discoverModel } from "./llm-client.js";
 import type { ChatMessage } from "./llm-client.js";
 import { ACTOR_BUILDER_SYSTEM_PROMPT } from "./prompts/actor-builder.js";
 import { extractActors } from "./actor-extractor.js";
+import {
+  collectLocalFileContext,
+  docsIndex,
+  getDocSection,
+  renderKnowledgeContext,
+  retrieveSections,
+} from "./knowledge/index.js";
+import { WalkthroughPager } from "./components/WalkthroughPager.js";
+import { WALKTHROUGH_LESSONS } from "./walkthrough.js";
 
 /** Strip ANSI escapes and control characters from untrusted strings. */
 function sanitize(s: string): string {
@@ -427,6 +438,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [isExecuting, setIsExecuting] = useState(false);
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
+  const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
 
   const [history, setHistory] = useState<string[]>([]);
@@ -445,7 +457,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     if (!projectReady) {
       addMessage(
         "system",
-        "No .cowboy/ project found in current directory. Run /init <local|dev> to start."
+        "No .cowboy/ project found in current directory. Run /init to get started on mesa (the public devnet), or /init local for a local node."
       );
       return;
     }
@@ -470,6 +482,40 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       });
     }
   }, [projectReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-fund: a wallet with zero balance gets a faucet drip so new users
+  // can deploy immediately. Attempted once per launch; /init already funds
+  // freshly created projects via the cowboy CLI.
+  const autoFundAttempted = useRef(false);
+  useEffect(() => {
+    if (!projectReady || !session.walletAddress || autoFundAttempted.current) return;
+    autoFundAttempted.current = true;
+    const { validatorUrl, walletAddress } = session;
+    let cancelled = false;
+    (async () => {
+      const balance = await fetchAccountBalance(validatorUrl, walletAddress);
+      if (cancelled || balance !== 0) return;
+      try {
+        const result = await requestFaucet(validatorUrl, walletAddress);
+        if (!cancelled) {
+          addMessage(
+            "system",
+            `Wallet balance was 0 - requested ${result.amountCby} CBY from the faucet (tx ${result.txHash.slice(0, 10)}...).`
+          );
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          addMessage(
+            "system",
+            `Wallet balance is 0 and the faucet is unavailable (${err instanceof Error ? err.message : String(err)}). Try /faucet later.`
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectReady, session.walletAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateRunnerPrefs = useCallback((patch: Partial<RunnerPreferences>) => {
     setSession((prev) => {
@@ -739,9 +785,40 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         return;
       }
 
+      // faucet — direct RPC request, defaults to the session wallet
+      if (command === "faucet") {
+        const address = args[0] ?? session.walletAddress;
+        if (!address) {
+          addMessage("error", "No wallet address known. Run /init first or pass one: /faucet <address>");
+          return;
+        }
+        setIsExecuting(true);
+        try {
+          const result = await requestFaucet(session.validatorUrl, address);
+          addMessage(
+            "output",
+            [
+              `  Faucet request ${result.status}`,
+              "",
+              `  Recipient: ${address}`,
+              `  Amount:    ${result.amountCby.toLocaleString("en-US")} CBY`,
+              `  Tx:        ${result.txHash}`,
+            ].join("\n")
+          );
+        } catch (err: unknown) {
+          addMessage("error", `Faucet request failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setIsExecuting(false);
+        }
+        return;
+      }
+
       // init has special handling (extract wallet, replace next steps)
       if (command === "init") {
         setIsExecuting(true);
+        // The cowboy CLI requests faucet funds during init; don't stack a
+        // second drip when the wallet address lands in session state.
+        autoFundAttempted.current = true;
         try {
           const cowboyArgs = commandToCowboyArgs(command, args);
           const result = await executeCowboy(cowboyArgs, session.validatorUrl);
@@ -843,14 +920,20 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         const discovered = await discoverModel(session.runnerUrl);
         if (discovered) model = discovered;
 
+        // Ground the builder: retrieve matching knowledge-pack sections
+        // into the system prompt, and pull in local .py files the user
+        // referenced by path.
+        const knowledgeContext = renderKnowledgeContext(retrieveSections(prompt, 1200));
+        const localFileContext = collectLocalFileContext(prompt);
+
         // Build conversation with history
         const conversationHistory: ChatMessage[] = [
           ...session.aiHistory,
-          { role: "user", content: prompt },
+          { role: "user", content: prompt + localFileContext },
         ];
 
         const { messages: trimmedMessages, maxOutputTokens } = trimMessages(
-          ACTOR_BUILDER_SYSTEM_PROMPT,
+          ACTOR_BUILDER_SYSTEM_PROMPT + knowledgeContext,
           conversationHistory
         );
 
@@ -960,15 +1043,39 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
         case "wizard":
           if (!projectReady) {
-            addMessage("error", "No project initialized. Run /init <local|dev> first.");
+            addMessage("error", "No project initialized. Run /init first.");
             break;
           }
           setActiveWizard(result.wizard);
           break;
 
+        case "walkthrough": {
+          const lesson = result.lesson ?? 1;
+          if (lesson > WALKTHROUGH_LESSONS.length) {
+            addMessage("error", `There are ${WALKTHROUGH_LESSONS.length} lessons. Usage: /walkthrough [1-${WALKTHROUGH_LESSONS.length}]`);
+            break;
+          }
+          setWalkthroughLesson(lesson);
+          break;
+        }
+
+        case "docs": {
+          if (!result.topic) {
+            addMessage("output", docsIndex());
+            break;
+          }
+          const section = getDocSection(result.topic);
+          if (!section) {
+            addMessage("error", `No doc topic matches "${result.topic}". Run /docs to list topics.`);
+            break;
+          }
+          addMessage("output", `  ${section.title}\n\n${section.body}`);
+          break;
+        }
+
         case "execute":
-          if (!projectReady && result.command !== "init") {
-            addMessage("error", "No project initialized. Run /init <local|dev> first.");
+          if (!projectReady && result.command !== "init" && result.command !== "faucet") {
+            addMessage("error", "No project initialized. Run /init first.");
             break;
           }
           await executeCommand(result.command, result.args, result.stdin);
@@ -976,7 +1083,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
         case "prompt":
           if (!projectReady) {
-            addMessage("error", "No project initialized. Run /init <local|dev> first.");
+            addMessage("error", "No project initialized. Run /init first.");
             break;
           }
           await handlePromptSubmit(result.text);
@@ -1080,7 +1187,20 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         )
       )}
 
-      {activeWizard === "token-launch" ? (
+      {walkthroughLesson !== null ? (
+        <WalkthroughPager
+          initialLesson={walkthroughLesson}
+          onExit={(completed) => {
+            setWalkthroughLesson(null);
+            addMessage(
+              "system",
+              completed
+                ? "Walkthrough complete. /init to get set up, /docs for reference topics, or just describe what you want to build."
+                : "Walkthrough closed. Resume any time with /walkthrough."
+            );
+          }}
+        />
+      ) : activeWizard === "token-launch" ? (
         <TokenLaunchWizard
           walletAddress={session.walletAddress}
           onLaunch={handleTokenLaunch}

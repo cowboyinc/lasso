@@ -201,3 +201,70 @@ test("/wallet export and /wallet import appear in slash suggestions", () => {
   assert.ok(walletSuggestions.includes("/wallet export"));
   assert.ok(walletSuggestions.includes("/wallet import"));
 });
+
+test("/init defaults to mesa (cowboy dev network)", () => {
+  assert.deepEqual(parseCommand("/init"), {
+    type: "execute",
+    command: "init",
+    args: ["dev"],
+  });
+
+  assert.deepEqual(parseCommand("/init mesa"), {
+    type: "execute",
+    command: "init",
+    args: ["dev"],
+  });
+
+  assert.deepEqual(parseCommand("/init local"), {
+    type: "execute",
+    command: "init",
+    args: ["local"],
+  });
+
+  // The cowboy CLI name for mesa still works.
+  assert.deepEqual(parseCommand("/init dev"), {
+    type: "execute",
+    command: "init",
+    args: ["dev"],
+  });
+
+  const invalid = parseCommand("/init summit");
+  assert.equal(invalid.type, "error");
+});
+
+test("/faucet defaults to the session wallet and validates addresses", () => {
+  assert.deepEqual(parseCommand("/faucet"), {
+    type: "execute",
+    command: "faucet",
+    args: [],
+  });
+
+  assert.deepEqual(parseCommand("/faucet 0x1234567890abcdef1234567890abcdef12345678"), {
+    type: "execute",
+    command: "faucet",
+    args: ["0x1234567890abcdef1234567890abcdef12345678"],
+  });
+
+  const invalid = parseCommand("/faucet nonsense");
+  assert.equal(invalid.type, "error");
+});
+
+test("/walkthrough opens the pager at an optional lesson", () => {
+  assert.deepEqual(parseCommand("/walkthrough"), {
+    type: "walkthrough",
+    lesson: null,
+  });
+
+  assert.deepEqual(parseCommand("/walkthrough 3"), {
+    type: "walkthrough",
+    lesson: 3,
+  });
+
+  const invalid = parseCommand("/walkthrough zero");
+  assert.equal(invalid.type, "error");
+});
+
+test("/docs lists topics or selects one", () => {
+  assert.deepEqual(parseCommand("/docs"), { type: "docs", topic: null });
+  assert.deepEqual(parseCommand("/docs gas"), { type: "docs", topic: "gas" });
+});

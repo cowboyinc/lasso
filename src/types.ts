@@ -62,4 +62,6 @@ export type CommandResult =
   | { type: "clear" }
   | { type: "prompt"; text: string }
   | { type: "execute"; command: string; args: string[]; stdin?: string }
-  | { type: "wizard"; wizard: "token-launch" };
+  | { type: "wizard"; wizard: "token-launch" }
+  | { type: "walkthrough"; lesson: number | null }
+  | { type: "docs"; topic: string | null };

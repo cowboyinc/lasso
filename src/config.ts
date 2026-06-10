@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActorEntry, ProjectConfig, RunnerPreferences } from "./types.js";
 
-const DEFAULT_RPC_URL = "http://localhost:4000";
+const DEFAULT_RPC_URL = "https://rpc.mesa.cowboylabs.net";
 
 const DEFAULT_RUNNER_PREFERENCES: RunnerPreferences = {
   primaryRunner: null,

@@ -195,6 +195,59 @@ function appendUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, "")}${path}`;
 }
 
+export interface FaucetResult {
+  status: string;
+  txHash: string;
+  amountCby: number;
+}
+
+export async function requestFaucet(
+  validatorUrl: string,
+  address: string
+): Promise<FaucetResult> {
+  if (!HEX_ADDRESS_RE.test(address)) {
+    throw new Error(`Invalid address format: ${address}`);
+  }
+  const res = await fetch(appendUrl(validatorUrl, "/faucet"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address }),
+  });
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!res.ok) {
+    const message = typeof body?.message === "string" ? body.message : `Faucet request failed (${res.status})`;
+    throw new Error(message);
+  }
+  return {
+    status: String(body?.status ?? "accepted"),
+    txHash: String(body?.tx_hash ?? ""),
+    amountCby: Number(body?.amount_cby ?? 0),
+  };
+}
+
+/**
+ * Fetch an account's balance. Accounts that have never received funds
+ * return 404 from the node, which maps to a balance of 0.
+ * Returns null when the balance could not be determined.
+ */
+export async function fetchAccountBalance(
+  validatorUrl: string,
+  address: string
+): Promise<number | null> {
+  if (!HEX_ADDRESS_RE.test(address)) {
+    return null;
+  }
+  try {
+    const res = await fetch(appendUrl(validatorUrl, `/account/${encodeURIComponent(address)}`));
+    if (res.status === 404) return 0;
+    if (!res.ok) return null;
+    const body = (await res.json()) as { balance?: number };
+    return typeof body.balance === "number" ? body.balance : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchActorDetail(
   validatorUrl: string,
   address: string

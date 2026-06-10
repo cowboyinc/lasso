@@ -8,7 +8,7 @@ import { loadProjectConfig } from "./config.js";
 import type { ProjectConfig } from "./types.js";
 
 const DEFAULT_CONFIG: ProjectConfig = {
-  validatorUrl: "http://localhost:4000",
+  validatorUrl: "https://rpc.mesa.cowboylabs.net",
   dashboardUrl: null,
   walletAddress: null,
   runnerUrl: null,

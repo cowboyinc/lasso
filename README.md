@@ -13,20 +13,32 @@
 
 An interactive terminal console for the Cowboy blockchain. Lasso wraps the `cowboy` CLI into a persistent session with project detection, command history, and local state tracking.
 
-## Getting Started
+## Install
+
+```bash
+brew tap cowboyinc/lasso
+brew install lasso
+```
+
+Or run from source:
 
 ```bash
 npm install
 npm run dev
 ```
 
-On launch, Lasso checks the current directory for a `.cowboy/` project. If none is found, run `init` to create one:
+## Getting Started
+
+Lasso connects to **mesa**, the public Cowboy devnet, by default — no setup required. New to Cowboy? Run `/walkthrough` for a guided tour of how the system works.
+
+On launch, Lasso checks the current directory for a `.cowboy/` project. If none is found, run `/init` to create one:
 
 ```
-init dev
+/init           # mesa, the public devnet (default)
+/init local     # a node you run yourself
 ```
 
-This initializes the project, generates a wallet, and scaffolds a starter actor.
+This initializes the project, generates a wallet, requests faucet funds for it, and scaffolds a starter actor. Wallets with a zero balance are automatically topped up from the faucet at launch; `/faucet` requests more any time.
 
 ## Commands
 
@@ -34,7 +46,10 @@ This initializes the project, generates a wallet, and scaffolds a starter actor.
 
 | Command | Description |
 |---------|-------------|
-| `init <dev\|local>` | Initialize project environment |
+| `init [mesa\|local]` | Initialize project environment (default: mesa) |
+| `walkthrough [n]` | Guided tour of how Cowboy works |
+| `docs [topic]` | Browse bundled Cowboy reference docs |
+| `faucet [address]` | Request devnet CBY (defaults to your wallet) |
 | `help` | Show all available commands |
 | `clear` | Clear the console |
 | `exit` | Quit lasso |
@@ -61,11 +76,13 @@ This initializes the project, generates a wallet, and scaffolds a starter actor.
 
 ## How It Works
 
-Lasso runs as a persistent terminal session built with [Ink](https://github.com/vadimdemedes/ink). Commands are parsed locally and dispatched to the `cowboy` CLI as subprocesses. Some commands have additional behavior:
+Lasso runs as a persistent terminal session built with [Ink](https://github.com/vadimdemedes/ink). Commands are parsed locally and dispatched to the `cowboy` CLI as subprocesses or sent straight to the validator RPC. Some commands have additional behavior:
 
-- **`init`** extracts the wallet address from the CLI output and saves it to `~/.lasso/config.json`
+- **`init`** extracts the wallet address from the CLI output and tracks it in `.cowboy/config.json`
 - **`actor deploy`** extracts the actor address and tracks it locally
 - **`actor list`** is a lasso-only command that lists all actors you've deployed from this console
+- **`faucet`** and the launch-time auto-fund call the validator's `POST /faucet` endpoint directly
+- **plain text** goes to the AI actor builder, grounded by a bundled Cowboy knowledge pack (see `/docs`) and any local `actors/*.py` files you reference by path
 
 The status bar at the bottom shows the current network, project status, and wallet address.
 
@@ -91,11 +108,13 @@ macOS caveats:
 
 ## Configuration
 
-Config is stored at `~/.lasso/config.json` and includes:
+Config is stored at `.cowboy/config.json` in the project directory (written by `cowboy init`, shared with the CLI). Per environment:
 
-- `validatorUrl` - the target validator endpoint
-- `walletAddress` - your wallet address (set after `init`)
-- `actors` - array of deployed actor addresses
+- `rpc_url` - the target validator endpoint (default: `https://rpc.mesa.cowboylabs.net`)
+- `key_file` - wallet key location under `.cowboy/keys/`
+- `runner_url` - OpenAI-compatible runner endpoint for the AI builder
+- `dashboard_url` - optional dashboard API for live actor lists
+- `actors` - deployed actor addresses and labels
 
 ## License
 
