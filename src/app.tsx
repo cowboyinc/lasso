@@ -45,6 +45,8 @@ import {
 } from "./knowledge/index.js";
 import { WalkthroughPager } from "./components/WalkthroughPager.js";
 import { WALKTHROUGH_LESSONS } from "./walkthrough.js";
+import { checkForUpdate } from "./update-check.js";
+import { VERSION } from "./constants.js";
 
 /** Strip ANSI escapes and control characters from untrusted strings. */
 function sanitize(s: string): string {
@@ -472,6 +474,18 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     getCowboyVersion().then(setCowboyVersion);
   }, []);
 
+  // Best-effort update notice (LASSO_NO_UPDATE_CHECK=1 to disable)
+  useEffect(() => {
+    checkForUpdate(VERSION).then((latest) => {
+      if (latest) {
+        addMessage(
+          "system",
+          `lasso ${latest} is available (you have ${VERSION}): brew upgrade cowboyinc/lasso/lasso`
+        );
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-detect wallet address from key file if not set
   useEffect(() => {
     if (projectReady && !session.walletAddress) {
@@ -531,7 +545,11 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       if (command === "deploy-actor") {
         setIsExecuting(true);
         try {
-          const result = await deployActor(args[0], session.validatorUrl);
+          const { text: result, ok } = await deployActor(args[0], session.validatorUrl);
+          if (!ok) {
+            addMessage("error", result);
+            return;
+          }
 
           // Extract actor address and auto-label from filename
           const actorMatch = result.match(/Actor address:\s*(?:0x)?([a-fA-F0-9]{40})/);
@@ -821,11 +839,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         autoFundAttempted.current = true;
         try {
           const cowboyArgs = commandToCowboyArgs(command, args);
-          const result = await executeCowboy(cowboyArgs, session.validatorUrl);
-
-          // executeCowboy reports failures as text rather than throwing.
-          // Only treat the run as an init if the CLI actually produced one.
-          if (!/Wallet address:|Created \.cowboy/.test(result)) {
+          const { text: result, ok } = await executeCowboy(cowboyArgs, session.validatorUrl);
+          if (!ok) {
             addMessage("error", result);
             return;
           }
@@ -877,8 +892,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setIsExecuting(true);
         try {
           const cowboyArgs = commandToCowboyArgs(command, args);
-          const raw = await executeCowboy(cowboyArgs, session.validatorUrl);
-          addMessage("output", formatTokenList(raw));
+          const { text: raw, ok } = await executeCowboy(cowboyArgs, session.validatorUrl);
+          addMessage(ok ? "output" : "error", ok ? formatTokenList(raw) : raw);
         } catch (err: unknown) {
           addMessage("error", `Command failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -890,12 +905,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       setIsExecuting(true);
       try {
         const cowboyArgs = commandToCowboyArgs(command, args);
-        const result = await executeCowboy(
+        const { text: result, ok } = await executeCowboy(
           cowboyArgs,
           session.validatorUrl,
           stdin,
         );
-        addMessage("output", result);
+        addMessage(ok ? "output" : "error", result);
       } catch (err: unknown) {
         addMessage(
           "error",
@@ -1137,8 +1152,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       setIsExecuting(true);
       try {
         const cowboyArgs = commandToCowboyArgs("token-create", args);
-        const result = await executeCowboy(cowboyArgs, session.validatorUrl);
-        addMessage("output", result);
+        const { text: result, ok } = await executeCowboy(cowboyArgs, session.validatorUrl);
+        addMessage(ok ? "output" : "error", result);
       } catch (err: unknown) {
         addMessage(
           "error",

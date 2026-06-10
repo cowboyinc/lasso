@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.5] - 2026-06-10
+
+### Added
+- E2E smoke suite: `npm run test:e2e` drives the built TUI through a PTY
+  with a canned cowboy CLI (banner, /docs, /walkthrough, init
+  success/failure/missing-CLI, silent-failure truthfulness); runs in CI
+- Update notice on launch when a newer GitHub release exists
+  (`LASSO_NO_UPDATE_CHECK=1` to disable)
+
+### Changed
+- cowboy CLI exit codes are surfaced: nonzero exits render as errors
+  across all commands; a silent failure reports "Command failed (exit N)"
+  instead of "Command completed (no output)"
+- "cowboy CLI not found" now includes the install hint
+  (`brew install cowboyinc/lasso/cowboy`)
+
 ## [0.3.4] - 2026-06-10
 
 ### Fixed
