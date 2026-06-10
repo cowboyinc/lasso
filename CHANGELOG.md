@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.2] - 2026-06-10
+
+### Changed
+- Walkthrough lesson 1: dropped the "Erlang got it right" intro bullet
+
 ## [0.3.1] - 2026-06-10
 
 ### Added
