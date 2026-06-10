@@ -16,7 +16,9 @@ export interface AgentTurnIO {
   onSystem: (text: string) => void;
   /** Append streaming text (assistant prose and write_actor drafts). */
   onToken: (token: string) => void;
-  /** Persist a generated actor to disk. */
+  /** Persist a generated actor to disk. Sync by contract; if it throws
+   *  (fs error), the exception propagates out of runAgentTurn to the
+   *  caller's catch. */
   writeActor: (actor: ExtractedActor) => void;
   /** Abort the underlying HTTP stream. */
   abort: () => void;
@@ -80,6 +82,8 @@ export async function runAgentTurn(
             const actor = actorFromCode(out.code);
             io.writeActor(actor);
             wrote.push(actor);
+            // The "Deploy with: /actor deploy <path>" hint is emitted once
+            // per turn by the caller (app.tsx) from result.wrote — not here.
             io.onSystem(`Wrote ${actor.className ?? "actor"} to ${actor.filePath}`);
           } else {
             io.onSystem(`✗ write_actor: ${out.notes || ev.summary || "failed"}`);
@@ -107,8 +111,11 @@ export async function runAgentTurn(
         break;
 
       case "done":
+        // Terminal event — stop consuming so trailing/stale events can't
+        // mutate committed UI state. The server closes the stream after
+        // done anyway; this makes it a guarantee.
         finalText = ev.finalAssistantContent;
-        break;
+        return { finalText, wrote, error: null };
 
       // reasoning_delta, iteration_start/end, tool_use_input_delta,
       // tool_use_end: intentionally not rendered in the TUI.

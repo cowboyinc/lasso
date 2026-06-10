@@ -133,3 +133,17 @@ test("other tool results render their summary", async () => {
   );
   assert.match(r.system.join("\n"), /✓ simulation passed/);
 });
+
+test("done ends the turn: trailing events are ignored", async () => {
+  const r = recordingIO();
+  const result = await runAgentTurn(
+    eventsOf(
+      { type: "text_delta", seq: 0, ts: 1, iteration: 0, delta: "answer" },
+      { type: "done", seq: 1, ts: 2, totalIterations: 1, finalAssistantContent: "answer" },
+      { type: "text_delta", seq: 2, ts: 3, iteration: 0, delta: "STALE" }
+    ),
+    r.io
+  );
+  assert.equal(result.finalText, "answer");
+  assert.ok(!r.tokens.includes("STALE"));
+});
