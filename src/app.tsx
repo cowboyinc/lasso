@@ -856,8 +856,8 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             "",
             " Next step deploy your first Actor:",
             "",
-            "   # Deploy to dev validator",
-            "   /actor deploy actors/hello/main.py",
+            "   # Deploy the starter actor created by init",
+            "   /actor deploy actors/counter/main.py",
           ].join("\n");
 
           addMessage("output", cleaned + nextSteps);
