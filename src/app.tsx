@@ -36,6 +36,8 @@ import { streamChat, trimMessages, discoverModel } from "./llm-client.js";
 import type { ChatMessage } from "./llm-client.js";
 import { ACTOR_BUILDER_SYSTEM_PROMPT } from "./prompts/actor-builder.js";
 import { extractActors } from "./actor-extractor.js";
+import { createConversation, streamAgentChat } from "./agent-client.js";
+import { runAgentTurn } from "./agent-turn.js";
 import {
   collectLocalFileContext,
   docsIndex,
@@ -438,6 +440,10 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const nextIdRef = useRef(0);
   const [input, setInput] = useState<EditorBuffer>(() => createEditorState(""));
   const [isExecuting, setIsExecuting] = useState(false);
+  // Agent-mode session state: one conversation per lasso session, created
+  // lazily on the first AI prompt. abort ref lets Ctrl+C cancel a stream.
+  const conversationIdRef = useRef<string | null>(null);
+  const agentAbortRef = useRef<(() => void) | null>(null);
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
@@ -923,12 +929,112 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
     [session, addMessage, updateRunnerPrefs]
   );
 
+  const runAgentPrompt = useCallback(
+    async (prompt: string) => {
+      const dashboardUrl = session.dashboardUrl;
+      if (!dashboardUrl) return;
+
+      if (!session.walletAddress) {
+        addMessage("error", "AI builder needs a wallet. Run /init to set one up.");
+        return;
+      }
+
+      setIsExecuting(true);
+      setStreamingText("");
+      let streamed = "";
+
+      try {
+        // createConversation's firstMessage only seeds the conversation
+        // title server-side — the backend explicitly does NOT persist it as
+        // a chat turn (see dashboard backend conversations.ts) — so sending
+        // the prompt via streamAgentChat below is not a duplicate.
+        if (!conversationIdRef.current) {
+          conversationIdRef.current = await createConversation(
+            dashboardUrl,
+            session.walletAddress,
+            prompt
+          );
+        }
+
+        // Inline any local .py files the user referenced, like the direct
+        // path does — the backend can't read this machine's files. The
+        // backend's own knowledge tool replaces the local knowledge pack.
+        const content = prompt + collectLocalFileContext(prompt);
+
+        const handle = streamAgentChat(dashboardUrl, {
+          conversationId: conversationIdRef.current,
+          content,
+        });
+        agentAbortRef.current = handle.abort;
+
+        const result = await runAgentTurn(handle.events, {
+          onSystem: (text) => addMessage("system", text),
+          onToken: (token) => {
+            streamed += token;
+            setStreamingText((prev) => prev + token);
+          },
+          writeActor: (actor) => {
+            const fullPath = join(process.cwd(), actor.filePath);
+            mkdirSync(dirname(fullPath), { recursive: true });
+            writeFileSync(fullPath, actor.code + "\n", "utf-8");
+          },
+          abort: handle.abort,
+        });
+
+        if (result.error) {
+          // Keep any partial stream for context, then the error banner last.
+          if (streamed.trim()) {
+            addMessage("output", streamed);
+          }
+          addMessage("error", `AI builder failed: ${result.error}`);
+        } else {
+          const finalText = result.finalText ?? streamed;
+          if (finalText.trim()) {
+            addMessage("output", finalText);
+          }
+        }
+        if (result.wrote.length > 0) {
+          addMessage("system", `Deploy with: /actor deploy ${result.wrote[0].filePath}`);
+        }
+      } catch (err) {
+        const aborted = err instanceof Error && err.name === "AbortError";
+        if (!aborted) {
+          // Keep whatever streamed before the disconnect, then explain.
+          if (streamed.trim()) {
+            addMessage("output", streamed);
+          }
+          // Show only the origin: a configured URL could embed credentials.
+          let displayUrl = dashboardUrl;
+          try {
+            displayUrl = new URL(dashboardUrl).origin;
+          } catch {
+            // unparseable — leave as configured
+          }
+          addMessage(
+            "error",
+            `AI builder failed: ${err instanceof Error ? err.message : String(err)} — check dashboard_url in .cowboy/config.json (currently ${displayUrl})`
+          );
+        }
+      } finally {
+        agentAbortRef.current = null;
+        setIsExecuting(false);
+        setStreamingText("");
+      }
+    },
+    [session, addMessage]
+  );
+
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
+      if (session.dashboardUrl) {
+        await runAgentPrompt(prompt);
+        return;
+      }
+
       if (!session.runnerUrl) {
         addMessage(
           "error",
-          "No runner URL configured. Add runner_url to .cowboy/config.json or use /init."
+          "No AI endpoint configured. Set dashboard_url (or runner_url for direct mode) in .cowboy/config.json, or run /init."
         );
         return;
       }
@@ -1027,7 +1133,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setStreamingText("");
       }
     },
-    [session, addMessage]
+    [session, addMessage, runAgentPrompt]
   );
 
   const handleSubmit = useCallback(
@@ -1172,7 +1278,15 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   }, [addMessage]);
 
   const handleInterrupt = useCallback(() => {
-    if (isExecuting) return;
+    if (isExecuting) {
+      if (agentAbortRef.current) {
+        agentAbortRef.current();
+        addMessage("system", "Interrupted.");
+      } else {
+        addMessage("system", "Cannot interrupt — waiting for response.");
+      }
+      return;
+    }
 
     if (input.value.length > 0) {
       setInput(createEditorState(""));
@@ -1249,6 +1363,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         cowboyVersion={cowboyVersion}
         runnerPreferences={session.runnerPreferences}
         runnerUrl={session.runnerUrl}
+        dashboardUrl={session.dashboardUrl}
       />
     </Box>
   );

@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0] - 2026-06-10
+
+### Changed
+- The AI actor builder now drives the dashboard backend agent
+  (`POST /api/agent/chat` on `dashboard.mesa.cowboylabs.net` by default) —
+  the same agent loop, tools, and conversations as the dashboard frontend.
+  Generated actors are still written to `actors/<name>/main.py` with a
+  `/actor deploy` hint.
+- `dashboard_url` now defaults to `https://dashboard.mesa.cowboylabs.net`.
+  Set `"dashboard_url": ""` in `.cowboy/config.json` to opt out and use the
+  direct `runner_url` vLLM path instead.
+- Ctrl+C now cancels an in-flight AI stream (agent path; direct `runner_url`
+  mode still waits for the response to complete).
+- Because `dashboard_url` is now set by default, `/actor list` shows live
+  dashboard data for initialized wallets instead of the local-only list.
+- Agent output renders markdown (headings, bullet/numbered lists, italics,
+  quotes, rules — on top of the existing bold/inline-code/code blocks), and
+  the command echo no longer uses a hardcoded dark background that was
+  unreadable on light terminal themes.
+- The status bar AI indicator shows the active backend (`AI: dashboard`,
+  `AI: direct`, or `AI: off`) instead of keying on `runner_url` alone.
+
+### Known gaps
+- Agent actions that need a wallet signature (deploy/transfer) are not yet
+  supported from lasso; the builder points you at `/actor deploy` instead.
+
 ## [0.3.5] - 2026-06-10
 
 ### Added

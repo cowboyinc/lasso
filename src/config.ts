@@ -4,6 +4,26 @@ import type { ActorEntry, ProjectConfig, RunnerPreferences } from "./types.js";
 
 const DEFAULT_RPC_URL = "https://rpc.mesa.cowboylabs.net";
 
+export const DEFAULT_DASHBOARD_URL = "https://dashboard.mesa.cowboylabs.net";
+
+/**
+ * dashboard_url resolution: absent → mesa default (agent mode out of the
+ * box); explicitly "" (or null) → opt out, fall back to direct runner_url
+ * mode; any other string → normalized as given. Scheme-less values default
+ * to https — wallet-scoped conversation content flows over this URL, so a
+ * project-local config must not silently downgrade it to plaintext; loopback
+ * hosts keep http for local dev.
+ */
+function resolveDashboardUrl(raw: unknown): string | null {
+  if (raw === undefined) return DEFAULT_DASHBOARD_URL;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(trimmed);
+  return `${isLoopback ? "http" : "https"}://${trimmed}`;
+}
+
 const DEFAULT_RUNNER_PREFERENCES: RunnerPreferences = {
   primaryRunner: null,
   helperRunner: null,
@@ -94,7 +114,7 @@ export function loadProjectConfig(): ProjectConfig | null {
 
     return {
       validatorUrl: normalizeEndpointUrl(typeof target.rpc_url === "string" ? target.rpc_url : DEFAULT_RPC_URL) ?? DEFAULT_RPC_URL,
-      dashboardUrl: normalizeEndpointUrl(typeof target.dashboard_url === "string" ? target.dashboard_url : null),
+      dashboardUrl: resolveDashboardUrl(target.dashboard_url),
       walletAddress: typeof target.wallet_address === "string" ? target.wallet_address : null,
       runnerUrl: normalizeEndpointUrl(typeof target.runner_url === "string" ? target.runner_url : null),
       actors: normalizeActors(target.actors),

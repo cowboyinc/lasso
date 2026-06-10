@@ -113,9 +113,19 @@ Config is stored at `.cowboy/config.json` in the project directory (written by `
 
 - `rpc_url` - the target validator endpoint (default: `https://rpc.mesa.cowboylabs.net`)
 - `key_file` - wallet key location under `.cowboy/keys/`
-- `runner_url` - OpenAI-compatible runner endpoint for the AI builder
-- `dashboard_url` - optional dashboard API for live actor lists
+- `dashboard_url` - dashboard API base URL (default: `https://dashboard.mesa.cowboylabs.net`); drives the AI builder and live actor lists
+- `runner_url` - OpenAI-compatible runner endpoint; used by the AI builder only when `dashboard_url` is set to `""`
 - `actors` - deployed actor addresses and labels
+
+### AI builder backends
+
+Plain-text prompts go to the Cowboy dashboard agent at
+`https://dashboard.mesa.cowboylabs.net` (configurable via `dashboard_url`
+in `.cowboy/config.json`). The agent generates actor code server-side;
+lasso writes it to `actors/<name>/main.py` and suggests `/actor deploy`.
+
+To use a direct vLLM runner instead (the pre-0.4 behavior), set
+`"dashboard_url": ""` and point `runner_url` at your runner.
 
 ## License
 

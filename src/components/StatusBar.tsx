@@ -10,12 +10,17 @@ interface StatusBarProps {
   cowboyVersion: string | null;
   runnerPreferences: RunnerPreferences;
   runnerUrl: string | null;
+  dashboardUrl: string | null;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
+
+  // Mirrors handlePromptSubmit's routing rule: dashboard agent first,
+  // direct runner second — so the label can't disagree with behavior.
+  const aiMode = dashboardUrl ? "dashboard" : runnerUrl ? "direct" : "off";
 
   return (
     <Box paddingX={1} justifyContent="space-between">
@@ -30,7 +35,7 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, 
           </>
         )}
         {"  "}|{"  "}
-        AI: <Text color={runnerUrl ? "green" : "red"}>{runnerUrl ? "on" : "off"}</Text>
+        AI: <Text color={aiMode === "off" ? "red" : "green"}>{aiMode}</Text>
       </Text>
       <Text dimColor>
         {cowboyVersion && <>cli v{cowboyVersion}{"  "}|{"  "}</>}

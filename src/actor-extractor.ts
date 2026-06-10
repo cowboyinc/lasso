@@ -12,23 +12,30 @@ export interface ExtractedActor {
 }
 
 /**
+ * Build an ExtractedActor from raw Python source: ensure the dispatch
+ * shim, read the class name, derive the snake_case file path. Used both
+ * for fenced code blocks (legacy direct-vLLM path) and for write_actor
+ * tool results from the dashboard agent (which carry code but no path).
+ */
+export function actorFromCode(rawCode: string): ExtractedActor {
+  const code = ensureDispatchShim(rawCode);
+  const className = extractClassName(code);
+  const name = className
+    ? className.replace(/Actor$/, "").replace(/([A-Z])/g, "_$1").replace(/^_/, "").toLowerCase() || "actor"
+    : "actor";
+  return {
+    className,
+    code,
+    filePath: `actors/${name}/main.py`,
+  };
+}
+
+/**
  * Extract Python code blocks from LLM text, add dispatch shims,
  * and derive file paths from class names.
  */
 export function extractActors(text: string): ExtractedActor[] {
-  const blocks = extractPythonCodeBlocks(text);
-  return blocks.map((rawCode) => {
-    const code = ensureDispatchShim(rawCode);
-    const className = extractClassName(code);
-    const name = className
-      ? className.replace(/Actor$/, "").replace(/([A-Z])/g, "_$1").replace(/^_/, "").toLowerCase()
-      : "actor";
-    return {
-      className,
-      code,
-      filePath: `actors/${name}/main.py`,
-    };
-  });
+  return extractPythonCodeBlocks(text).map(actorFromCode);
 }
 
 function extractPythonCodeBlocks(text: string): string[] {
@@ -46,6 +53,10 @@ function extractPythonCodeBlocks(text: string): string[] {
 }
 
 function extractClassName(code: string): string | null {
+  // Prefer the @actor-decorated class (matches ensureDispatchShim's target)
+  // so helper classes before it don't hijack the file name.
+  const actorMatch = code.match(/@actor\s*\n(?:@[^\n]*\n)*class\s+(\w+)/);
+  if (actorMatch) return actorMatch[1];
   const match = code.match(/class\s+(\w+)\s*[:(]/);
   return match ? match[1] : null;
 }

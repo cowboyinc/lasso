@@ -4,7 +4,7 @@ import { render } from "ink";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { App } from "./app.js";
-import { loadProjectConfig } from "./config.js";
+import { loadProjectConfig, DEFAULT_DASHBOARD_URL } from "./config.js";
 import { VERSION } from "./constants.js";
 import type { ProjectConfig } from "./types.js";
 
@@ -26,7 +26,7 @@ Lasso connects to mesa by default and stores project config in
 
 const DEFAULT_CONFIG: ProjectConfig = {
   validatorUrl: "https://rpc.mesa.cowboylabs.net",
-  dashboardUrl: null,
+  dashboardUrl: DEFAULT_DASHBOARD_URL,
   walletAddress: null,
   runnerUrl: null,
   actors: [],

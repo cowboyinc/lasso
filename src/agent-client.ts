@@ -1,0 +1,286 @@
+/**
+ * Agent protocol client — lasso-side mirror of the dashboard agent stream.
+ *
+ * Event types ported verbatim from
+ * dashboard/frontend/src/lib/agent/events.ts (itself a mirror of
+ * dashboard/backend/src/agent/events.ts). Keep in sync — there is no
+ * shared-types package today.
+ */
+
+export const AGENT_PROTOCOL_VERSION = 1;
+
+export type AgentEvent =
+  | StreamStartEvent
+  | TextDeltaEvent
+  | ReasoningDeltaEvent
+  | ToolUseStartEvent
+  | ToolUseInputDeltaEvent
+  | ToolOutputDeltaEvent
+  | ToolUseEndEvent
+  | ToolResultEvent
+  | ToolPendingSignatureEvent
+  | IterationStartEvent
+  | IterationEndEvent
+  | ErrorEvent
+  | DoneEvent;
+
+interface BaseEvent {
+  seq: number;
+  ts: number;
+}
+
+export interface StreamStartEvent extends BaseEvent {
+  type: "stream_start";
+  protocol: number;
+  conversationId: string;
+  sessionId: string;
+  model: string;
+}
+
+export interface IterationStartEvent extends BaseEvent {
+  type: "iteration_start";
+  iteration: number;
+}
+
+export interface IterationEndEvent extends BaseEvent {
+  type: "iteration_end";
+  iteration: number;
+  stopReason: "end_turn" | "tool_use" | "max_tokens" | "max_iters" | "error";
+}
+
+export interface TextDeltaEvent extends BaseEvent {
+  type: "text_delta";
+  iteration: number;
+  delta: string;
+}
+
+/** Chain-of-thought tokens from a reasoning runner. NOT part of the answer —
+ *  shown as a transient "Thinking…" affordance, never persisted. */
+export interface ReasoningDeltaEvent extends BaseEvent {
+  type: "reasoning_delta";
+  iteration: number;
+  delta: string;
+}
+
+export interface ToolUseStartEvent extends BaseEvent {
+  type: "tool_use_start";
+  iteration: number;
+  toolUseId: string;
+  toolName: string;
+  displayName?: string;
+}
+
+export interface ToolUseInputDeltaEvent extends BaseEvent {
+  type: "tool_use_input_delta";
+  iteration: number;
+  toolUseId: string;
+  delta: string;
+}
+
+export interface ToolOutputDeltaEvent extends BaseEvent {
+  type: "tool_output_delta";
+  iteration: number;
+  toolUseId: string;
+  channel: "draft" | "repair" | "log";
+  delta: string;
+}
+
+export interface ToolUseEndEvent extends BaseEvent {
+  type: "tool_use_end";
+  iteration: number;
+  toolUseId: string;
+  input: unknown;
+}
+
+export interface ToolResultEvent extends BaseEvent {
+  type: "tool_result";
+  iteration: number;
+  toolUseId: string;
+  status: "ok" | "error";
+  output: unknown;
+  summary?: string;
+  durationMs: number;
+}
+
+export interface ToolPendingSignatureEvent extends BaseEvent {
+  type: "tool_pending_signature";
+  iteration: number;
+  toolUseId: string;
+  preview: {
+    kind: "deploy" | "message" | "transfer";
+    summary: string;
+    estCycles?: number;
+    estCells?: number;
+    maxFeeCby?: string;
+    payload: unknown;
+  };
+}
+
+export interface ErrorEvent extends BaseEvent {
+  type: "error";
+  iteration?: number;
+  toolUseId?: string;
+  message: string;
+  recoverable: boolean;
+}
+
+export interface DoneEvent extends BaseEvent {
+  type: "done";
+  totalIterations: number;
+  finalAssistantContent: string;
+  truncated?: boolean;
+}
+
+/** Hard cap on un-framed SSE bytes. A healthy stream emits a \n\n separator
+ *  every few KB; without a cap, a misbehaving endpoint that never sends a
+ *  separator would grow the buffer unboundedly. */
+const MAX_SSE_BUFFER_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Parse an SSE byte stream into AgentEvents. Frames are separated by a
+ * blank line; only `data:` lines carry events. Ported from
+ * dashboard/frontend/src/lib/agent/sse-client.ts.
+ */
+export async function* parseEventStream(
+  body: ReadableStream<Uint8Array>
+): AsyncGenerator<AgentEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+        throw new Error(
+          "agent stream: no frame separator within 10MB — aborting"
+        );
+      }
+
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const event = parseFrame(frame);
+        if (event) yield event;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Intentional divergence from the upstream browser client: flush any
+  // unterminated final frame. The server always ends frames with \n\n, but
+  // lasso reads over a real remote connection where truncation can eat the
+  // final separator — without this, a truncated `done` event vanishes.
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = parseFrame(buffer);
+    if (event) yield event;
+  }
+}
+
+function parseFrame(frame: string): AgentEvent | null {
+  let dataLine: string | null = null;
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (line.startsWith("data:")) {
+      dataLine = line.slice(5).trim();
+    }
+  }
+  if (!dataLine) return null;
+  try {
+    return JSON.parse(dataLine) as AgentEvent;
+  } catch {
+    return null;
+  }
+}
+
+export interface AgentChatRequest {
+  conversationId: string;
+  content: string;
+  /** When true, restrict the agent to read-only research. Unused by lasso today. */
+  planMode?: boolean;
+  /** Optional model id. Omitted: the server resolves its default. */
+  model?: string;
+}
+
+export interface StreamHandle {
+  /** Async iterable of parsed events. */
+  events: AsyncGenerator<AgentEvent>;
+  /** Aborts the in-flight request and closes the stream. */
+  abort: () => void;
+}
+
+/**
+ * Create a builder conversation scoped to the wallet. Mirrors the dashboard
+ * frontend (ChatLauncher.tsx): POST /api/conversations, kind "builder".
+ */
+export async function createConversation(
+  dashboardUrl: string,
+  wallet: string,
+  firstMessage: string
+): Promise<string> {
+  const base = dashboardUrl.replace(/\/$/, "");
+  // No timeout on purpose: this is a fast non-streaming POST, and the TUI's
+  // Ctrl+C abort only arms once the chat stream starts.
+  const response = await fetch(`${base}/api/conversations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet, kind: "builder", firstMessage }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`create conversation ${response.status}: ${text.slice(0, 300)}`);
+  }
+  const data = (await response.json()) as { conversation?: { id?: string } };
+  const id = data.conversation?.id;
+  if (!id) {
+    throw new Error("create conversation: malformed response (no conversation.id)");
+  }
+  return id;
+}
+
+/**
+ * Stream one agent turn. Mirrors the dashboard frontend's sse-client.ts,
+ * with the dashboard URL made explicit (lasso is not same-origin).
+ */
+export function streamAgentChat(
+  dashboardUrl: string,
+  req: AgentChatRequest,
+  init: { signal?: AbortSignal } = {}
+): StreamHandle {
+  const controller = new AbortController();
+  if (init.signal) {
+    if (init.signal.aborted) {
+      controller.abort();
+    } else {
+      init.signal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
+  }
+
+  async function* generate(): AsyncGenerator<AgentEvent> {
+    const base = dashboardUrl.replace(/\/$/, "");
+    const response = await fetch(`${base}/api/agent/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`agent chat ${response.status}: ${text.slice(0, 300)}`);
+    }
+    if (!response.body) {
+      throw new Error("agent chat: empty response body");
+    }
+    yield* parseEventStream(response.body);
+  }
+
+  return { events: generate(), abort: () => controller.abort() };
+}
