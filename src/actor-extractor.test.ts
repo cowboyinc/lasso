@@ -38,3 +38,18 @@ test("extractActors still extracts fenced python blocks", () => {
   assert.equal(actors.length, 1);
   assert.equal(actors[0].filePath, "actors/counter/main.py");
 });
+
+test("actorFromCode handles a class named exactly Actor without an empty path segment", () => {
+  const actor = actorFromCode(
+    `from cowboy import actor\n\n@actor\nclass Actor:\n    def init(self, payload):\n        return b"ok"\n`
+  );
+  assert.equal(actor.filePath, "actors/actor/main.py");
+});
+
+test("actorFromCode names the file after the @actor class, not a preceding helper class", () => {
+  const actor = actorFromCode(
+    `from cowboy import actor\n\nclass Helper:\n    pass\n\n@actor\nclass VaultActor:\n    def init(self, payload):\n        return b"ok"\n`
+  );
+  assert.equal(actor.className, "VaultActor");
+  assert.equal(actor.filePath, "actors/vault/main.py");
+});

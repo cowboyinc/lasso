@@ -21,7 +21,7 @@ export function actorFromCode(rawCode: string): ExtractedActor {
   const code = ensureDispatchShim(rawCode);
   const className = extractClassName(code);
   const name = className
-    ? className.replace(/Actor$/, "").replace(/([A-Z])/g, "_$1").replace(/^_/, "").toLowerCase()
+    ? className.replace(/Actor$/, "").replace(/([A-Z])/g, "_$1").replace(/^_/, "").toLowerCase() || "actor"
     : "actor";
   return {
     className,
@@ -53,6 +53,10 @@ function extractPythonCodeBlocks(text: string): string[] {
 }
 
 function extractClassName(code: string): string | null {
+  // Prefer the @actor-decorated class (matches ensureDispatchShim's target)
+  // so helper classes before it don't hijack the file name.
+  const actorMatch = code.match(/@actor\s*\n(?:@[^\n]*\n)*class\s+(\w+)/);
+  if (actorMatch) return actorMatch[1];
   const match = code.match(/class\s+(\w+)\s*[:(]/);
   return match ? match[1] : null;
 }
