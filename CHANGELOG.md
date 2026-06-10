@@ -13,6 +13,8 @@
   direct `runner_url` vLLM path instead.
 - Ctrl+C now cancels an in-flight AI stream (agent path; direct `runner_url`
   mode still waits for the response to complete).
+- Because `dashboard_url` is now set by default, `/actor list` shows live
+  dashboard data for initialized wallets instead of the local-only list.
 
 ### Known gaps
 - Agent actions that need a wallet signature (deploy/transfer) are not yet
