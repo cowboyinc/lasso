@@ -1,6 +1,6 @@
 {
   "name": "lasso",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Cowboy blockchain console",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
     "build": "tsup src/cli.tsx --format esm --dts",
     "start": "node dist/cli.js",
     "test": "find src -name '*.test.ts' -print0 | xargs -0 node --import tsx --test",
+    "test:e2e": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true; npm run build && find test/e2e -name '*.test.ts' -print0 | xargs -0 node --import tsx --test",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@types/node": "^25.3.0",
     "@types/react": "^19.2.14",
+    "node-pty": "^1.1.0",
     "react-devtools-core": "^7.0.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",

@@ -61,6 +61,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: E2E smoke (PTY + stubbed cowboy CLI)
+        run: npm run test:e2e
+
   # ===========================================================================
   # BUILD - Cross-compiles Bun binaries and uploads to S3 (push to main only)
   # ===========================================================================

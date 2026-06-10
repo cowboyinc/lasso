@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Canned cowboy CLI for lasso e2e tests.
+#
+# Emits the output shapes lasso parses, without touching a network or a
+# real chain. Failure modes are driven by COWBOY_STUB_MODE:
+#   fail        -> stderr + exit 1 for every invocation
+#   fail-silent -> exit 1 with no output at all (the lying-CLI case)
+#   (unset)     -> canned success per subcommand
+set -euo pipefail
+
+if [[ "${COWBOY_STUB_MODE:-}" == "fail" ]]; then
+  echo "Error: stub-injected failure" >&2
+  exit 1
+fi
+if [[ "${COWBOY_STUB_MODE:-}" == "fail-silent" ]]; then
+  exit 1
+fi
+
+# lasso prepends "--indexer-url <url>" to most invocations; strip it.
+if [[ "${1:-}" == "--indexer-url" ]]; then
+  shift 2
+fi
+
+case "${1:-}" in
+  version)
+    echo "cowboy 9.9.9-stub"
+    ;;
+  init)
+    mkdir -p .cowboy/keys actors/counter
+    printf 'stub-key\n' > .cowboy/keys/dev
+    cat > .cowboy/config.json <<'JSON'
+{
+  "active": "dev",
+  "environments": {
+    "dev": {
+      "rpc_url": "http://127.0.0.1:9",
+      "key_file": "keys/dev"
+    }
+  }
+}
+JSON
+    [[ -f actors/counter/main.py ]] || printf '# stub starter actor\n' > actors/counter/main.py
+    echo "Creating Cowboy project..."
+    echo "  Created .cowboy/keys/dev"
+    echo "  Created .cowboy/config.json (network: dev, rpc: http://127.0.0.1:9)"
+    echo "  Created actors/counter/main.py"
+    echo ""
+    echo "Wallet address: 0x1111111111111111111111111111111111111111"
+    echo ""
+    echo "Next steps:"
+    echo "  cowboy actor deploy --code actors/counter/main.py"
+    ;;
+  wallet)
+    case "${2:-}" in
+      address) echo "0x1111111111111111111111111111111111111111" ;;
+      balance) echo "Balance: 5000 CBY" ;;
+      *) echo "stub: unhandled wallet subcommand: ${2:-}" >&2; exit 1 ;;
+    esac
+    ;;
+  actor)
+    case "${2:-}" in
+      deploy)
+        echo "Actor address: 0x2222222222222222222222222222222222222222"
+        echo "Actor deployment transaction submitted successfully"
+        ;;
+      *) echo "stub: unhandled actor subcommand: ${2:-}" >&2; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "stub: unhandled command: $*" >&2
+    exit 1
+    ;;
+esac

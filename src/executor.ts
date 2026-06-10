@@ -42,11 +42,17 @@ export function executeCowboyAsync(
   });
 }
 
+export interface CowboyResult {
+  text: string;
+  /** True when the CLI ran and exited 0. */
+  ok: boolean;
+}
+
 export async function executeCowboy(
   cowboyArgs: string[],
   validatorUrl: string,
   stdin?: string,
-): Promise<string> {
+): Promise<CowboyResult> {
   try {
     const args = ["--indexer-url", validatorUrl, ...cowboyArgs];
     const result = await executeCowboyAsync(args, stdin);
@@ -55,16 +61,22 @@ export async function executeCowboy(
     if (result.stderr) {
       output += result.stderr;
     }
-    return output.trim() || "Command completed (no output)";
+    return {
+      text: output.trim() || (result.exitCode === 0 ? "Command completed (no output)" : `Command failed (exit ${result.exitCode})`),
+      ok: result.exitCode === 0,
+    };
   } catch (err: unknown) {
     if (
       err instanceof Error &&
       "code" in err &&
       (err as NodeJS.ErrnoException).code === "ENOENT"
     ) {
-      return "Error: cowboy CLI not found. Make sure it is installed and in your PATH.";
+      return {
+        text: "Error: cowboy CLI not found. Make sure it is installed and in your PATH.\nInstall it with: brew install cowboyinc/lasso/cowboy",
+        ok: false,
+      };
     }
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    return { text: `Error: ${err instanceof Error ? err.message : String(err)}`, ok: false };
   }
 }
 
@@ -512,7 +524,7 @@ export async function waitForLlmJobResult(
 export async function deployActor(
   filePath: string,
   validatorUrl: string
-): Promise<string> {
+): Promise<CowboyResult> {
   const salt = "0x" + randomBytes(16).toString("hex");
 
   try {
@@ -531,15 +543,18 @@ export async function deployActor(
       "10000000",
     ]);
 
-    return parseCowboyOutput(result);
+    return { text: parseCowboyOutput(result), ok: result.exitCode === 0 };
   } catch (err: unknown) {
     if (
       err instanceof Error &&
       "code" in err &&
       (err as NodeJS.ErrnoException).code === "ENOENT"
     ) {
-      return "Error: cowboy CLI not found. Make sure it is installed and in your PATH.";
+      return {
+        text: "Error: cowboy CLI not found. Make sure it is installed and in your PATH.\nInstall it with: brew install cowboyinc/lasso/cowboy",
+        ok: false,
+      };
     }
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    return { text: `Error: ${err instanceof Error ? err.message : String(err)}`, ok: false };
   }
 }
