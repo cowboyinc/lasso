@@ -17,7 +17,7 @@ export const WALKTHROUGH_LESSONS: WalkthroughLesson[] = [
     title: "What is Cowboy?",
     body: `Cowboy is a Layer 1 blockchain built for autonomous agents.
 
-Three ideas define it:
+Two ideas define it:
 
   1. Smart contracts are Python.  "Actors" run in a deterministic
      Python VM (the PVM) - no Solidity, no new language to learn.
@@ -25,10 +25,6 @@ Three ideas define it:
   2. Agents need more than a ledger.  The protocol natively includes
      timers (self-scheduling code), runners (verifiable off-chain
      LLM / HTTP compute), and CBFS (encrypted file storage).
-
-  3. Erlang got it right.  Actors are isolated processes with
-     mailboxes and message passing - the model that has run telecom
-     switches for decades, applied to a blockchain.
 
 You are connected to mesa, the public devnet, by default. Everything
 in this walkthrough can be tried right now, for free.`,
