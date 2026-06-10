@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1] - 2026-06-10
+
+### Added
+- `lasso --version` / `-v` and `lasso --help` / `-h` print and exit instead
+  of launching the TUI; unknown arguments error with usage (exit 1)
+
 ## [0.3.0] - 2026-06-10
 
 ### Added
