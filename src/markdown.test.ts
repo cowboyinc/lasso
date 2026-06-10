@@ -75,3 +75,9 @@ test("parseMarkdown: consecutive blanks collapse, trailing blanks trimmed", () =
     { kind: "paragraph", spans: [{ style: "plain", text: "b" }] },
   ]);
 });
+
+test("parseInline: snake_case identifiers are not italics", () => {
+  assert.deepEqual(parseInline("use max_fee_per_gas and get_count here"), [
+    { style: "plain", text: "use max_fee_per_gas and get_count here" },
+  ]);
+});

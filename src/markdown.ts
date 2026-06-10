@@ -25,12 +25,13 @@ export type MdBlock =
  * Split a line into styled spans. Alternation order matters: `**bold**`
  * before `*italic*` so a double asterisk never half-matches as italic.
  * Italic/underscore content must start and end with non-space, so prose
- * like "2 * 3 * 4" stays plain.
+ * like "2 * 3 * 4" stays plain. Underscore emphasis additionally requires
+ * non-word context on both sides, so snake_case identifiers stay plain.
  */
 export function parseInline(text: string): InlineSpan[] {
   const spans: InlineSpan[] = [];
   const pattern =
-    /\*\*(.+?)\*\*|`([^`]+)`|\*(\S(?:[^*]*\S)?)\*|_(\S(?:[^_]*\S)?)_/g;
+    /\*\*(.+?)\*\*|`([^`]+)`|\*(\S(?:[^*]*\S)?)\*|(?<!\w)_(\S(?:[^_]*\S)?)_(?!\w)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(text)) !== null) {
