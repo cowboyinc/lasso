@@ -129,4 +129,4 @@ To use a direct vLLM runner instead (the pre-0.4 behavior), set
 
 ## License
 
-MIT
+Business Source License 1.1 — see [LICENSE](LICENSE).
