@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { ConsoleMessage } from "../types.js";
 import { parseMarkdown } from "../markdown.js";
 import type { InlineSpan, MdBlock } from "../markdown.js";
+import { stripTerminalControl } from "../terminal-sanitize.js";
 
 // Styling rule for this file: named ANSI styles only — never hex
 // backgrounds. They don't adapt to the user's terminal theme (a hardcoded
@@ -94,13 +95,17 @@ function renderMarkdown(content: string): React.ReactNode {
 }
 
 export function Message({ message }: MessageProps) {
+  // Agent/model output is untrusted — never let it write raw control
+  // sequences to the terminal.
+  const content = stripTerminalControl(message.content);
+
   switch (message.role) {
     case "command":
       return (
         <Box paddingX={1}>
           <Text dimColor>
             {"❯ "}
-            {message.content}
+            {content}
           </Text>
         </Box>
       );
@@ -108,21 +113,21 @@ export function Message({ message }: MessageProps) {
     case "output":
       return (
         <Box paddingX={1} flexDirection="column">
-          {renderMarkdown(message.content)}
+          {renderMarkdown(content)}
         </Box>
       );
 
     case "error":
       return (
         <Box paddingX={1}>
-          <Text color="red">{message.content}</Text>
+          <Text color="red">{content}</Text>
         </Box>
       );
 
     case "system":
       return (
         <Box paddingX={1}>
-          <Text color="yellow">{message.content}</Text>
+          <Text color="yellow">{content}</Text>
         </Box>
       );
   }

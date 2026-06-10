@@ -1003,9 +1003,16 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           if (streamed.trim()) {
             addMessage("output", streamed);
           }
+          // Show only the origin: a configured URL could embed credentials.
+          let displayUrl = dashboardUrl;
+          try {
+            displayUrl = new URL(dashboardUrl).origin;
+          } catch {
+            // unparseable — leave as configured
+          }
           addMessage(
             "error",
-            `AI builder failed: ${err instanceof Error ? err.message : String(err)} — check dashboard_url in .cowboy/config.json (currently ${dashboardUrl})`
+            `AI builder failed: ${err instanceof Error ? err.message : String(err)} — check dashboard_url in .cowboy/config.json (currently ${displayUrl})`
           );
         }
       } finally {

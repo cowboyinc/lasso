@@ -108,3 +108,25 @@ test("dashboard_url explicit value is normalized and used", () => {
     }
   );
 });
+
+test("dashboard_url scheme-less non-loopback host defaults to https", () => {
+  withTempConfig(
+    { rpc_url: "https://rpc.mesa.cowboylabs.net", dashboard_url: "dashboard.example.com" },
+    () => {
+      const config = loadProjectConfig();
+      assert.ok(config);
+      assert.equal(config.dashboardUrl, "https://dashboard.example.com");
+    }
+  );
+});
+
+test("dashboard_url explicit http is honored (deliberate opt-in)", () => {
+  withTempConfig(
+    { rpc_url: "https://rpc.mesa.cowboylabs.net", dashboard_url: "http://10.0.0.5:8000" },
+    () => {
+      const config = loadProjectConfig();
+      assert.ok(config);
+      assert.equal(config.dashboardUrl, "http://10.0.0.5:8000");
+    }
+  );
+});

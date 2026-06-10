@@ -131,6 +131,11 @@ export interface DoneEvent extends BaseEvent {
   truncated?: boolean;
 }
 
+/** Hard cap on un-framed SSE bytes. A healthy stream emits a \n\n separator
+ *  every few KB; without a cap, a misbehaving endpoint that never sends a
+ *  separator would grow the buffer unboundedly. */
+const MAX_SSE_BUFFER_BYTES = 10 * 1024 * 1024;
+
 /**
  * Parse an SSE byte stream into AgentEvents. Frames are separated by a
  * blank line; only `data:` lines carry events. Ported from
@@ -148,6 +153,12 @@ export async function* parseEventStream(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+
+      if (buffer.length > MAX_SSE_BUFFER_BYTES) {
+        throw new Error(
+          "agent stream: no frame separator within 10MB — aborting"
+        );
+      }
 
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) >= 0) {

@@ -168,3 +168,11 @@ test("streamAgentChat throws a descriptive error on non-200", async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+test("parseEventStream aborts when a frame never terminates (buffer cap)", async () => {
+  const chunk = "x".repeat(1024 * 1024);
+  await assert.rejects(
+    () => collect(streamFromChunks(Array.from({ length: 11 }, () => chunk))),
+    /no frame separator within 10MB/
+  );
+});
