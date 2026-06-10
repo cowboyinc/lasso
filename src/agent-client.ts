@@ -187,3 +187,81 @@ function parseFrame(frame: string): AgentEvent | null {
     return null;
   }
 }
+
+export interface AgentChatRequest {
+  conversationId: string;
+  content: string;
+  /** When true, restrict the agent to read-only research. Unused by lasso today. */
+  planMode?: boolean;
+  /** Optional model id. Omitted: the server resolves its default. */
+  model?: string;
+}
+
+export interface StreamHandle {
+  /** Async iterable of parsed events. */
+  events: AsyncGenerator<AgentEvent>;
+  /** Aborts the in-flight request and closes the stream. */
+  abort: () => void;
+}
+
+/**
+ * Create a builder conversation scoped to the wallet. Mirrors the dashboard
+ * frontend (ChatLauncher.tsx): POST /api/conversations, kind "builder".
+ */
+export async function createConversation(
+  dashboardUrl: string,
+  wallet: string,
+  firstMessage: string
+): Promise<string> {
+  const base = dashboardUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/conversations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet, kind: "builder", firstMessage }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`create conversation ${response.status}: ${text.slice(0, 300)}`);
+  }
+  const data = (await response.json()) as { conversation?: { id?: string } };
+  const id = data.conversation?.id;
+  if (!id) {
+    throw new Error("create conversation: malformed response (no conversation.id)");
+  }
+  return id;
+}
+
+/**
+ * Stream one agent turn. Mirrors the dashboard frontend's sse-client.ts,
+ * with the dashboard URL made explicit (lasso is not same-origin).
+ */
+export function streamAgentChat(
+  dashboardUrl: string,
+  req: AgentChatRequest,
+  init: { signal?: AbortSignal } = {}
+): StreamHandle {
+  const controller = new AbortController();
+  if (init.signal) {
+    init.signal.addEventListener("abort", () => controller.abort());
+  }
+
+  async function* generate(): AsyncGenerator<AgentEvent> {
+    const base = dashboardUrl.replace(/\/$/, "");
+    const response = await fetch(`${base}/api/agent/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`agent chat ${response.status}: ${text.slice(0, 300)}`);
+    }
+    if (!response.body) {
+      throw new Error("agent chat: empty response body");
+    }
+    yield* parseEventStream(response.body);
+  }
+
+  return { events: generate(), abort: () => controller.abort() };
+}

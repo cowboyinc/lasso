@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEventStream } from "./agent-client.js";
+import { parseEventStream, createConversation, streamAgentChat } from "./agent-client.js";
 import type { AgentEvent } from "./agent-client.js";
 
 function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
@@ -72,4 +72,99 @@ test("parseEventStream flushes a final frame missing its trailing separator", as
   );
   assert.equal(events.length, 1);
   assert.equal(events[0].type, "done");
+});
+
+test("createConversation posts wallet/kind/firstMessage and returns the id", async () => {
+  const realFetch = globalThis.fetch;
+  let capturedUrl = "";
+  let capturedBody: unknown = null;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ conversation: { id: "conv-42" } }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  try {
+    const id = await createConversation(
+      "https://dashboard.mesa.cowboylabs.net/",
+      "0xabc",
+      "build a counter"
+    );
+    assert.equal(id, "conv-42");
+    assert.equal(
+      capturedUrl,
+      "https://dashboard.mesa.cowboylabs.net/api/conversations"
+    );
+    assert.deepEqual(capturedBody, {
+      wallet: "0xabc",
+      kind: "builder",
+      firstMessage: "build a counter",
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("createConversation throws a descriptive error on non-200", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("wallet and kind required", { status: 400 })) as typeof fetch;
+  try {
+    await assert.rejects(
+      () => createConversation("https://x.test", "0xabc", "hi"),
+      /create conversation 400: wallet and kind required/
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("streamAgentChat posts conversationId/content and yields parsed events", async () => {
+  const realFetch = globalThis.fetch;
+  let capturedUrl = "";
+  let capturedBody: unknown = null;
+  const sse =
+    'data: {"type":"text_delta","seq":0,"ts":1,"iteration":0,"delta":"yee"}\n\n' +
+    'data: {"type":"done","seq":1,"ts":2,"totalIterations":1,"finalAssistantContent":"yee"}\n\n';
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(String(init?.body));
+    return new Response(sse, { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const handle = streamAgentChat("https://x.test", {
+      conversationId: "conv-42",
+      content: "build a counter",
+    });
+    const events: string[] = [];
+    for await (const ev of handle.events) events.push(ev.type);
+    assert.deepEqual(events, ["text_delta", "done"]);
+    assert.equal(capturedUrl, "https://x.test/api/agent/chat");
+    assert.deepEqual(capturedBody, {
+      conversationId: "conv-42",
+      content: "build a counter",
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("streamAgentChat throws a descriptive error on non-200", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("conversation not found", { status: 404 })) as typeof fetch;
+  try {
+    const handle = streamAgentChat("https://x.test", {
+      conversationId: "nope",
+      content: "hi",
+    });
+    await assert.rejects(async () => {
+      for await (const ev of handle.events) void ev;
+    }, /agent chat 404: conversation not found/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
