@@ -214,6 +214,8 @@ export async function createConversation(
   firstMessage: string
 ): Promise<string> {
   const base = dashboardUrl.replace(/\/$/, "");
+  // No timeout on purpose: this is a fast non-streaming POST, and the TUI's
+  // Ctrl+C abort only arms once the chat stream starts.
   const response = await fetch(`${base}/api/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -242,7 +244,13 @@ export function streamAgentChat(
 ): StreamHandle {
   const controller = new AbortController();
   if (init.signal) {
-    init.signal.addEventListener("abort", () => controller.abort());
+    if (init.signal.aborted) {
+      controller.abort();
+    } else {
+      init.signal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
   }
 
   async function* generate(): AsyncGenerator<AgentEvent> {
