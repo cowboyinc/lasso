@@ -49,8 +49,8 @@ On plain-text prompt submit:
    - `session.dashboardUrl` set → agent path (new, default).
    - else `session.runnerUrl` set → existing direct-vLLM path, unchanged.
    - else → setup error message.
-   Removing `dashboard_url` from `.cowboy/config.json` opts back into direct
-   mode.
+   Setting `"dashboard_url": ""` in `.cowboy/config.json` opts back into direct
+   mode (absent means the mesa default).
 2. **Conversation (lazy, session-scoped):** on first AI prompt of the session:
    `POST {dashboardUrl}/api/conversations` with
    `{"wallet": <session.walletAddress>, "kind": "builder", "firstMessage": <prompt>}`
@@ -64,6 +64,9 @@ On plain-text prompt submit:
    omitted — the server resolves the model exactly as it does for the
    dashboard's default. The backend persists both turns server-side, so lasso
    does not send history; `aiHistory` remains only for the legacy path.
+   `content` is the prompt plus `collectLocalFileContext(prompt)` — lasso still
+   inlines local `.py` files the user references, since the backend cannot read
+   them.
    Contract source: `dashboard/backend/src/routes/agent.ts:1805` and
    `dashboard/frontend/src/lib/agent/sse-client.ts`.
 4. **Stream:** consume SSE frames (`data: <json>` separated by `\n\n`) until
@@ -115,7 +118,7 @@ Event shapes source: `dashboard/backend/src/agent/events.ts`.
   - SSE parser against fixture frames, including frames split across chunks and
     every event type.
   - `write_actor` `tool_result` → file write mapping (derived path, fallback).
-  - Routing rule: dashboard set / runner only / neither.
+  - Routing rule: `dashboard_url` resolution unit-tested in `config.test.ts`; the branch itself is Ink glue, exercised by manual smoke (steps 1 and 4).
 - Manual smoke against live mesa before shipping.
 - TDD during implementation.
 
