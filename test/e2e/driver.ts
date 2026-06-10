@@ -48,6 +48,19 @@ export function launchLasso(opts?: {
   const cwd = opts?.cwd ?? mkdtempSync(join(tmpdir(), "lasso-e2e-"));
   const pathPrefix = opts?.withStubCli === false ? "" : `${STUB_DIR}:`;
 
+  // Ink degrades to final-frame-only rendering when it detects CI
+  // (is-in-ci), which blanks dynamic regions like the status bar and the
+  // walkthrough pager. The whole point of the PTY is interactive
+  // rendering, so scrub CI markers from the child env.
+  const env: Record<string, string> = Object.fromEntries(
+    Object.entries(process.env).filter(([k, v]) => v !== undefined) as [string, string][]
+  );
+  for (const key of Object.keys(env)) {
+    if (key === "CI" || key === "CONTINUOUS_INTEGRATION" || key === "BUILD_NUMBER" || key === "RUN_ID" || key.startsWith("GITHUB_") || key.startsWith("CI_")) {
+      delete env[key];
+    }
+  }
+
   let buffer = "";
   const pty = spawn(process.execPath, [CLI_PATH], {
     name: "xterm-256color",
@@ -55,7 +68,7 @@ export function launchLasso(opts?: {
     rows: 40,
     cwd,
     env: {
-      ...process.env,
+      ...env,
       PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
       LASSO_NO_UPDATE_CHECK: "1",
       ...opts?.env,
