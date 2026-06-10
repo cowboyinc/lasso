@@ -4,6 +4,19 @@ import type { ActorEntry, ProjectConfig, RunnerPreferences } from "./types.js";
 
 const DEFAULT_RPC_URL = "https://rpc.mesa.cowboylabs.net";
 
+export const DEFAULT_DASHBOARD_URL = "https://dashboard.mesa.cowboylabs.net";
+
+/**
+ * dashboard_url resolution: absent → mesa default (agent mode out of the
+ * box); explicitly "" (or null) → opt out, fall back to direct runner_url
+ * mode; any other string → normalized as given.
+ */
+function resolveDashboardUrl(raw: unknown): string | null {
+  if (raw === undefined) return DEFAULT_DASHBOARD_URL;
+  if (typeof raw !== "string") return null;
+  return normalizeEndpointUrl(raw);
+}
+
 const DEFAULT_RUNNER_PREFERENCES: RunnerPreferences = {
   primaryRunner: null,
   helperRunner: null,
@@ -94,7 +107,7 @@ export function loadProjectConfig(): ProjectConfig | null {
 
     return {
       validatorUrl: normalizeEndpointUrl(typeof target.rpc_url === "string" ? target.rpc_url : DEFAULT_RPC_URL) ?? DEFAULT_RPC_URL,
-      dashboardUrl: normalizeEndpointUrl(typeof target.dashboard_url === "string" ? target.dashboard_url : null),
+      dashboardUrl: resolveDashboardUrl(target.dashboard_url),
       walletAddress: typeof target.wallet_address === "string" ? target.wallet_address : null,
       runnerUrl: normalizeEndpointUrl(typeof target.runner_url === "string" ? target.runner_url : null),
       actors: normalizeActors(target.actors),
