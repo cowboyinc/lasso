@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2] - 2026-06-11
+
+### Changed
+- The banner: Terrace-font Cowboy wordmark with the original cactus beside
+  it. Banner rotation and `LASSO_BANNER` are gone — a winner was picked.
+  The cactus's left arm renders for the first time (its backslashes had
+  been unescaped since the original art landed).
+
 ## [0.4.1] - 2026-06-11
 
 ### Changed
