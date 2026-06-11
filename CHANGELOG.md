@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.3] - 2026-06-11
+
+### Changed
+- Banner restored to the original block wordmark + cactus (with its
+  backslashes properly escaped, so the full cactus renders)
+
 ## [0.4.2] - 2026-06-11
 
 ### Changed
