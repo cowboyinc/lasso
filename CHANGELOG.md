@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1] - 2026-06-11
+
+### Changed
+- Three new launch banners (slant wordmark + lasso rope, big wordmark
+  wearing the hat, the original cactus now properly dressed) rotating per
+  launch while we pick a favorite; pin one with `LASSO_BANNER=0|1|2`
+
 ## [0.4.0] - 2026-06-10
 
 ### Changed
