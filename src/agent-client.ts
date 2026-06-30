@@ -19,6 +19,7 @@ export type AgentEvent =
   | ToolUseEndEvent
   | ToolResultEvent
   | ToolPendingSignatureEvent
+  | PlanEvent
   | IterationStartEvent
   | IterationEndEvent
   | ErrorEvent
@@ -116,6 +117,20 @@ export interface ToolPendingSignatureEvent extends BaseEvent {
   };
 }
 
+/** A single step in the agent's live plan/todo checklist (doc 61 T1.4). */
+export interface PlanStep {
+  text: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** The agent's current plan. The full ordered list is sent each time; replace
+ *  the rendered checklist with `steps`. */
+export interface PlanEvent extends BaseEvent {
+  type: "plan";
+  iteration: number;
+  steps: PlanStep[];
+}
+
 export interface ErrorEvent extends BaseEvent {
   type: "error";
   iteration?: number;
@@ -206,6 +221,10 @@ export interface AgentChatRequest {
   planMode?: boolean;
   /** Optional model id. Omitted: the server resolves its default. */
   model?: string;
+  /** Conversation mode (doc 61). "agent" = run-until-done (the model builds,
+   *  tests, and self-corrects across iterations before reporting). "guided" =
+   *  the legacy build-then-stop wizard. Omitted: server default (guided). */
+  mode?: "guided" | "agent";
 }
 
 export interface StreamHandle {

@@ -56,7 +56,7 @@ test("happy path: text streams, write_actor writes a file, done returns final te
     r.io
   );
 
-  assert.equal(r.system[0], "AI builder (cowboy-actor)");
+  assert.equal(r.system[0], "AI agent (cowboy-actor)");
   assert.equal(r.system[1], "⚙ Write actor…");
   assert.deepEqual(r.tokens, ["Sure — ", "class Counter"]);
   assert.equal(r.wrote.length, 1);
@@ -65,6 +65,40 @@ test("happy path: text streams, write_actor writes a file, done returns final te
   assert.equal(result.finalText, "Done. Want me to: Test it / Deploy it / Tweak it");
   assert.equal(result.wrote.length, 1);
   assert.equal(result.error, null);
+});
+
+test("plan event renders a checklist; update_plan tool start/result are suppressed", async () => {
+  const r = recordingIO();
+  await runAgentTurn(
+    eventsOf(
+      { type: "stream_start", seq: 0, ts: 1, protocol: 1, conversationId: "c", sessionId: "s", model: "m" },
+      // update_plan tool activity should NOT print "⚙ Update plan…" or a result line.
+      { type: "tool_use_start", seq: 1, ts: 2, iteration: 1, toolUseId: "p1", toolName: "update_plan", displayName: "Update plan" },
+      { type: "plan", seq: 2, ts: 3, iteration: 1, steps: [
+        { text: "Write the actor", status: "in_progress" },
+        { text: "Simulate it", status: "pending" },
+      ] },
+      { type: "tool_result", seq: 3, ts: 4, iteration: 1, toolUseId: "p1", status: "ok", durationMs: 0, output: { status: "ok" }, summary: "plan updated (0/2 done)" },
+      { type: "plan", seq: 4, ts: 5, iteration: 1, steps: [
+        { text: "Write the actor", status: "completed" },
+        { text: "Simulate it", status: "in_progress" },
+      ] },
+      { type: "done", seq: 5, ts: 6, totalIterations: 2, finalAssistantContent: "done" }
+    ),
+    r.io
+  );
+
+  // No tool activity line for update_plan.
+  assert.ok(!r.system.some((s) => s.includes("Update plan")), "no ⚙ Update plan line");
+  assert.ok(!r.system.some((s) => s.includes("plan updated")), "no tool_result summary line");
+  // First plan checklist rendered with [~]/[ ].
+  const first = r.system.find((s) => s.startsWith("Plan:") && s.includes("[~] Write the actor"));
+  assert.ok(first, "first plan checklist rendered");
+  assert.match(first!, /\[ \] Simulate it/);
+  // Second plan checklist shows the first step completed.
+  const second = r.system.find((s) => s.startsWith("Plan:") && s.includes("[x] Write the actor"));
+  assert.ok(second, "updated plan checklist rendered");
+  assert.match(second!, /\[~\] Simulate it/);
 });
 
 test("pending signature: explains, aborts, returns without error", async () => {

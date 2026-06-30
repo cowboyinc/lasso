@@ -47,19 +47,60 @@ export async function runAgentTurn(
   const toolNames = new Map<string, string>();
   let finalText: string | null = null;
 
+  // Agent mode emits the model's chain-of-thought as reasoning_delta. We
+  // buffer it and flush a single condensed "thinking" line per step (before
+  // the next tool call / answer) so the user sees the agent reasoning without
+  // the TUI being flooded by token-by-token thought.
+  let reasoningBuf = "";
+  const flushReasoning = () => {
+    const condensed = reasoningBuf.replace(/\s+/g, " ").trim();
+    reasoningBuf = "";
+    if (!condensed) return;
+    const preview = condensed.length > 240 ? condensed.slice(0, 240) + "…" : condensed;
+    io.onSystem(`thinking: ${preview}`);
+  };
+
+  // The route and the AgentLoop each emit a stream_start on the loop path;
+  // only announce the model once.
+  let startShown = false;
+
   for await (const ev of events) {
     switch (ev.type) {
       case "stream_start":
-        io.onSystem(`AI builder (${ev.model})`);
+        if (!startShown) {
+          startShown = true;
+          io.onSystem(`AI agent (${ev.model})`);
+        }
         break;
 
+      case "reasoning_delta":
+        reasoningBuf += ev.delta;
+        break;
+
+      case "plan": {
+        // Live checklist (doc 61 T1.4). Render the whole list each update;
+        // [x] done, [~] in progress, [ ] pending.
+        flushReasoning();
+        const mark = (s: string) =>
+          s === "completed" ? "[x]" : s === "in_progress" ? "[~]" : "[ ]";
+        const lines = ev.steps.map((s) => `  ${mark(s.status)} ${s.text}`);
+        io.onSystem(["Plan:", ...lines].join("\n"));
+        break;
+      }
+
       case "text_delta":
+        flushReasoning();
         io.onToken(ev.delta);
         break;
 
       case "tool_use_start":
+        flushReasoning();
         toolNames.set(ev.toolUseId, ev.toolName);
-        io.onSystem(`⚙ ${ev.displayName ?? ev.toolName}…`);
+        // update_plan renders as the "Plan:" checklist via its plan event;
+        // don't also print a "⚙ Update plan…" activity line.
+        if (ev.toolName !== "update_plan") {
+          io.onSystem(`⚙ ${ev.displayName ?? ev.toolName}…`);
+        }
         break;
 
       case "tool_output_delta":
@@ -71,6 +112,10 @@ export async function runAgentTurn(
 
       case "tool_result": {
         const toolName = toolNames.get(ev.toolUseId);
+        if (toolName === "update_plan") {
+          // Rendered via the plan event; swallow the tool result line.
+          break;
+        }
         if (toolName === "write_actor") {
           const out = (ev.output ?? {}) as WriteActorOutput;
           if (
@@ -114,11 +159,12 @@ export async function runAgentTurn(
         // Terminal event — stop consuming so trailing/stale events can't
         // mutate committed UI state. The server closes the stream after
         // done anyway; this makes it a guarantee.
+        flushReasoning();
         finalText = ev.finalAssistantContent;
         return { finalText, wrote, error: null };
 
-      // reasoning_delta, iteration_start/end, tool_use_input_delta,
-      // tool_use_end: intentionally not rendered in the TUI.
+      // iteration_start/end, tool_use_input_delta, tool_use_end:
+      // intentionally not rendered in the TUI.
       default:
         break;
     }

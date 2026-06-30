@@ -964,6 +964,9 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,
           content,
+          // doc 61: run-until-done. The agent builds, tests, and self-corrects
+          // across steps before reporting, instead of the build-then-stop wizard.
+          mode: "agent",
         });
         agentAbortRef.current = handle.abort;
 
