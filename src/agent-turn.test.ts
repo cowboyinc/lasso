@@ -67,6 +67,22 @@ test("happy path: text streams, write_actor writes a file, done returns final te
   assert.equal(result.error, null);
 });
 
+test("clarify event renders a numbered options prompt", async () => {
+  const r = recordingIO();
+  await runAgentTurn(
+    eventsOf(
+      { type: "stream_start", seq: 0, ts: 1, protocol: 1, conversationId: "c", sessionId: "s", model: "m" },
+      { type: "clarify", seq: 1, ts: 2, iteration: 1, question: "What kind of actor?", options: ["Counter", "Token"] },
+      { type: "done", seq: 2, ts: 3, totalIterations: 1, finalAssistantContent: "What kind of actor?\n\n- Counter\n- Token" }
+    ),
+    r.io
+  );
+  const line = r.system.find((s) => s.includes("Reply to continue"));
+  assert.ok(line, "renders a reply-to-continue prompt");
+  assert.match(line!, /1\. Counter/);
+  assert.match(line!, /2\. Token/);
+});
+
 test("plan event renders a checklist; update_plan tool start/result are suppressed", async () => {
   const r = recordingIO();
   await runAgentTurn(

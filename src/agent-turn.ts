@@ -88,6 +88,20 @@ export async function runAgentTurn(
         break;
       }
 
+      case "clarify": {
+        // doc 63 — the agent asked a question and is ending the turn. The
+        // question + options arrive as the turn's final text; cue the user to
+        // reply (lasso can't render clickable buttons, so a numbered hint).
+        flushReasoning();
+        if (ev.options && ev.options.length > 0) {
+          const opts = ev.options.map((o, i) => `  ${i + 1}. ${o}`);
+          io.onSystem(["Reply to continue (pick one or type your own):", ...opts].join("\n"));
+        } else {
+          io.onSystem("The agent needs your input — reply to continue.");
+        }
+        break;
+      }
+
       case "text_delta":
         flushReasoning();
         io.onToken(ev.delta);

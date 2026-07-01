@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Clarify prompts (doc 63).** When the agent asks a question via the `clarify` tool, the console renders it as a numbered "reply to continue (pick one or type your own)" list so you can answer with a number or your own text.
 - **Run-until-done agent mode (doc 61).** AI prompts now stream with `mode: "agent"`, so the console builds, tests, and self-corrects across steps before reporting (instead of the build-then-stop wizard). The transcript shows the agent's work as it goes: condensed `thinking:` lines from the model's reasoning, each `⚙ tool…` call, and its `✓`/`✗` result (e.g. simulation cycles/state changes) — so a build now reads as write → simulate → (fix) → report. Deploy still requires you to say "deploy it".
 - **Live plan/todo checklist (doc 61 T1.4).** The agent's `plan` events render as an updating `Plan:` checklist (`[x]` done, `[~]` in progress, `[ ]` pending) so you can see the steps it's working through. The `update_plan` tool's own activity/result lines are suppressed (the checklist is the rendering).
 
