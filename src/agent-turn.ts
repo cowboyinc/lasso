@@ -88,6 +88,16 @@ export async function runAgentTurn(
         break;
       }
 
+      case "secret_request": {
+        // doc 63 §9 — agent needs a secret; the value is set in the dashboard's
+        // secure Secrets UI, never in chat.
+        flushReasoning();
+        io.onSystem(
+          `Needs secret ${ev.name}${ev.reason ? ` (${ev.reason})` : ""} — set its value in the dashboard Secrets menu; it never passes through here.`
+        );
+        break;
+      }
+
       case "clarify": {
         // doc 63 — the agent asked a question and is ending the turn. The
         // question + options arrive as the turn's final text; cue the user to

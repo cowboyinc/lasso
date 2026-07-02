@@ -21,6 +21,7 @@ export type AgentEvent =
   | ToolPendingSignatureEvent
   | PlanEvent
   | ClarifyEvent
+  | SecretRequestEvent
   | IterationStartEvent
   | IterationEndEvent
   | ErrorEvent
@@ -139,6 +140,14 @@ export interface ClarifyEvent extends BaseEvent {
   iteration: number;
   question: string;
   options?: string[];
+}
+
+/** The agent needs a secret the user must set via the secure UI (doc 63 §9). */
+export interface SecretRequestEvent extends BaseEvent {
+  type: "secret_request";
+  iteration: number;
+  name: string;
+  reason: string;
 }
 
 export interface ErrorEvent extends BaseEvent {
