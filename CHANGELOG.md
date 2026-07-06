@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Removed
+- **Dropped clarify rendering (dashboard PR #177 removed the `clarify` tool).** Asking the user now goes through `ask_user` (blocking); lasso interactive support for it is a follow-up.
+
 ### Added
 - **Secret requests (doc 63 §9).** When the agent needs a secret set, the console prints a cue to set its value in the dashboard Secrets menu (the value never passes through the chat).
 - **Clarify prompts (doc 63).** When the agent asks a question via the `clarify` tool, the console renders it as a numbered "reply to continue (pick one or type your own)" list so you can answer with a number or your own text.

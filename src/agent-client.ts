@@ -20,7 +20,6 @@ export type AgentEvent =
   | ToolResultEvent
   | ToolPendingSignatureEvent
   | PlanEvent
-  | ClarifyEvent
   | SecretRequestEvent
   | IterationStartEvent
   | IterationEndEvent
@@ -131,15 +130,6 @@ export interface PlanEvent extends BaseEvent {
   type: "plan";
   iteration: number;
   steps: PlanStep[];
-}
-
-/** The agent asked the user a question and ended the turn (doc 63). The
- *  question is the turn's final message; options are answer choices. */
-export interface ClarifyEvent extends BaseEvent {
-  type: "clarify";
-  iteration: number;
-  question: string;
-  options?: string[];
 }
 
 /** The agent needs a secret the user must set via the secure UI (doc 63 §9). */
