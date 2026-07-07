@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Interactive `ask_user` (dashboard PR #177).** When the agent asks a blocking question, the console prints it (with numbered choices), lets you type an answer while the run stays parked (a bare number picks a choice; free text works too), and POSTs it to `/api/agent/answer-callback` so the same run resumes. Replaces the old turn-ending clarify cue.
+
 ### Removed
 - **Dropped clarify rendering (dashboard PR #177 removed the `clarify` tool).** Asking the user now goes through `ask_user` (blocking); lasso interactive support for it is a follow-up.
 

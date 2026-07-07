@@ -67,6 +67,25 @@ test("happy path: text streams, write_actor writes a file, done returns final te
   assert.equal(result.error, null);
 });
 
+test("tool_pending_question renders the question + choices and calls onAskUser", async () => {
+  const r = recordingIO();
+  const calls: Array<{ toolUseId: string; question: string }> = [];
+  await runAgentTurn(
+    eventsOf(
+      { type: "stream_start", seq: 0, ts: 1, protocol: 1, conversationId: "c", sessionId: "s", model: "m" },
+      { type: "tool_pending_question", seq: 1, ts: 2, sessionId: "s", toolUseId: "t1", question: "What kind of actor?", choices: ["Counter", "Token"] },
+      { type: "done", seq: 2, ts: 3, totalIterations: 1, finalAssistantContent: "ok" }
+    ),
+    { ...r.io, onAskUser: async (q) => { calls.push({ toolUseId: q.toolUseId, question: q.question }); } }
+  );
+  assert.equal(calls.length, 1, "onAskUser called once");
+  assert.equal(calls[0].toolUseId, "t1");
+  const line = r.system.find((s) => s.includes("Question: What kind of actor?"));
+  assert.ok(line, "renders the question");
+  assert.match(line!, /1\. Counter/);
+  assert.match(line!, /2\. Token/);
+});
+
 test("plan event renders a checklist; update_plan tool start/result are suppressed", async () => {
   const r = recordingIO();
   await runAgentTurn(

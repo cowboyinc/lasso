@@ -19,6 +19,8 @@ export type AgentEvent =
   | ToolUseEndEvent
   | ToolResultEvent
   | ToolPendingSignatureEvent
+  | ToolPendingQuestionEvent
+  | RunStatusEvent
   | PlanEvent
   | SecretRequestEvent
   | IterationStartEvent
@@ -130,6 +132,43 @@ export interface PlanEvent extends BaseEvent {
   type: "plan";
   iteration: number;
   steps: PlanStep[];
+}
+
+/** The agent called `ask_user` and is BLOCKING until answered (dashboard PR
+ *  #177). The run parks in awaiting_input; the client collects the answer and
+ *  POSTs it to /api/agent/answer-callback (correlated by sessionId+toolUseId),
+ *  which resumes the same run — the SSE stays open and streams the rest. */
+export interface ToolPendingQuestionEvent extends BaseEvent {
+  type: "tool_pending_question";
+  sessionId: string;
+  toolUseId: string;
+  question: string;
+  /** <=4 short choices; the client also allows free-text ("Other"). */
+  choices?: string[];
+}
+
+/** Detached-run state transition (running / awaiting_input / terminal). */
+export interface RunStatusEvent extends BaseEvent {
+  type: "run_status";
+  runId: string;
+  status: "running" | "awaiting_input" | "completed" | "interrupted" | "failed";
+}
+
+/** POST an ask_user answer (or cancel) to resume a blocked run. */
+export async function postAnswerCallback(
+  dashboardUrl: string,
+  body: { sessionId: string; toolUseId: string; action: "answer" | "cancel"; answer?: string }
+): Promise<void> {
+  const base = dashboardUrl.replace(/\/$/, "");
+  const resp = await fetch(`${base}/api/agent/answer-callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`answer-callback ${resp.status}: ${text.slice(0, 200)}`);
+  }
 }
 
 /** The agent needs a secret the user must set via the secure UI (doc 63 §9). */

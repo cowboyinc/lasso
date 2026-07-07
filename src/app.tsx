@@ -36,7 +36,7 @@ import { streamChat, trimMessages, discoverModel } from "./llm-client.js";
 import type { ChatMessage } from "./llm-client.js";
 import { ACTOR_BUILDER_SYSTEM_PROMPT } from "./prompts/actor-builder.js";
 import { extractActors } from "./actor-extractor.js";
-import { createConversation, streamAgentChat } from "./agent-client.js";
+import { createConversation, streamAgentChat, postAnswerCallback } from "./agent-client.js";
 import { runAgentTurn } from "./agent-turn.js";
 import {
   collectLocalFileContext,
@@ -444,6 +444,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   // lazily on the first AI prompt. abort ref lets Ctrl+C cancel a stream.
   const conversationIdRef = useRef<string | null>(null);
   const agentAbortRef = useRef<(() => void) | null>(null);
+  // ask_user (PR #177): while a run blocks on a question, the next submitted
+  // line is the ANSWER (not a new turn). answerResolverRef holds the resolver;
+  // pendingQuestionRef holds the choices for number-shortcut mapping.
+  const answerResolverRef = useRef<((answer: string) => void) | null>(null);
+  const pendingQuestionRef = useRef<{ choices: string[] } | null>(null);
+  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
@@ -982,6 +988,29 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             writeFileSync(fullPath, actor.code + "\n", "utf-8");
           },
           abort: handle.abort,
+          // ask_user (PR #177): park until the user types the next line, then
+          // POST it as the answer to resume the same run.
+          onAskUser: (q) =>
+            new Promise<void>((resolve) => {
+              pendingQuestionRef.current = { choices: q.choices ?? [] };
+              setAwaitingAnswer(true);
+              answerResolverRef.current = async (answer) => {
+                answerResolverRef.current = null;
+                pendingQuestionRef.current = null;
+                setAwaitingAnswer(false);
+                try {
+                  await postAnswerCallback(dashboardUrl, {
+                    sessionId: q.sessionId,
+                    toolUseId: q.toolUseId,
+                    action: "answer",
+                    answer,
+                  });
+                } catch (err) {
+                  addMessage("error", err instanceof Error ? err.message : String(err));
+                }
+                resolve();
+              };
+            }),
         });
 
         if (result.error) {
@@ -1142,6 +1171,22 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const handleSubmit = useCallback(
     async (value: string) => {
       const trimmed = value.trim();
+
+      // ask_user answer path (PR #177): while a run blocks on a question, the
+      // next line is the ANSWER, not a new turn — so this runs even while
+      // isExecuting. A bare number picks the matching choice; else free text.
+      if (answerResolverRef.current) {
+        if (!trimmed) return;
+        setInput(createEditorState(""));
+        addMessage("command", trimmed);
+        const choices = pendingQuestionRef.current?.choices ?? [];
+        const n = Number(trimmed);
+        const answer =
+          Number.isInteger(n) && n >= 1 && n <= choices.length ? choices[n - 1] : trimmed;
+        answerResolverRef.current(answer);
+        return;
+      }
+
       if (!trimmed || isExecuting) return;
 
       setInput(createEditorState(""));
@@ -1355,7 +1400,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           onHistoryUp={handleHistoryUp}
           onHistoryDown={handleHistoryDown}
           onActivity={handleInputActivity}
-          isDisabled={isExecuting}
+          isDisabled={isExecuting && !awaitingAnswer}
         />
       )}
 

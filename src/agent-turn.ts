@@ -22,6 +22,16 @@ export interface AgentTurnIO {
   writeActor: (actor: ExtractedActor) => void;
   /** Abort the underlying HTTP stream. */
   abort: () => void;
+  /** The agent called `ask_user` and is BLOCKING (PR #177). Collect the user's
+   *  answer and POST it to /api/agent/answer-callback, then resolve — the run
+   *  resumes and the SAME stream continues. When absent, the turn can't be
+   *  answered (the run stays parked); the CLI wires this to its input prompt. */
+  onAskUser?: (event: {
+    sessionId: string;
+    toolUseId: string;
+    question: string;
+    choices?: string[];
+  }) => Promise<void>;
 }
 
 export interface AgentTurnResult {
@@ -85,6 +95,27 @@ export async function runAgentTurn(
           s === "completed" ? "[x]" : s === "in_progress" ? "[~]" : "[ ]";
         const lines = ev.steps.map((s) => `  ${mark(s.status)} ${s.text}`);
         io.onSystem(["Plan:", ...lines].join("\n"));
+        break;
+      }
+
+      case "tool_pending_question": {
+        // ask_user (PR #177): the run is BLOCKED awaiting the user's answer.
+        // Prompt + POST the answer via onAskUser; the same stream resumes.
+        flushReasoning();
+        const choiceLines = (ev.choices && ev.choices.length > 0)
+          ? ["", ...ev.choices.map((c, i) => `  ${i + 1}. ${c}`), "", "(type a number or your own answer)"]
+          : [];
+        io.onSystem([`Question: ${ev.question}`, ...choiceLines].join("\n"));
+        if (io.onAskUser) {
+          await io.onAskUser({
+            sessionId: ev.sessionId,
+            toolUseId: ev.toolUseId,
+            question: ev.question,
+            choices: ev.choices,
+          });
+        } else {
+          io.onSystem("(this client can't collect the answer — the run is waiting)");
+        }
         break;
       }
 
