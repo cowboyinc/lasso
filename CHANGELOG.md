@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- The AI builder no longer emits explicit `charge_gas()` calls in generated actors, and the walkthrough / reference docs no longer instruct them — gas (cycles/cells) is metered automatically by the PVM as code runs.
+
 ### Added
 - **Interactive `ask_user` (dashboard PR #177).** When the agent asks a blocking question, the console prints it (with numbered choices), lets you type an answer while the run stays parked (a bare number picks a choice; free text works too), and POSTs it to `/api/agent/answer-callback` so the same run resumes. Replaces the old turn-ending clarify cue.
 
