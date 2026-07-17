@@ -46,8 +46,8 @@ import {
 import { runAgentTurn } from "./agent-turn.js";
 import { signHashLocally, type EcdsaSignature } from "./signer.js";
 import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME } from "./client-tool-bridge.js";
-import { decide, type PermissionClass, type PermissionMode } from "./permissions.js";
-import { resolveSafeWritePath } from "./safe-path.js";
+import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
+import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
 import {
   collectLocalFileContext,
   docsIndex,
@@ -384,10 +384,11 @@ function describePermissionMode(mode: PermissionMode): string {
     ? [
         "  Permission mode: auto",
         "",
-        "  Governs what the AGENT does on this machine. Its reads run without",
-        "  prompting; its writes and command execution will too once sandboxing",
-        "  lands (none exist yet, so they still ask). Anything that needs your",
-        "  wallet to sign ALWAYS asks, even in auto.",
+        "  Governs what the AGENT does on this machine. Its reads and its writes",
+        "  INSIDE the project run without prompting. Still always asks: writes",
+        "  outside the project or to protected files (.git, .cowboy, keys, .env,",
+        "  lockfiles), command execution, and anything needing a wallet signature.",
+        "  A path that tries to escape the project is blocked outright.",
         "",
         "  Commands you type yourself (/actor deploy, /transfer, …) run as usual",
         "  — that's your own intent, not the agent's.",
@@ -398,7 +399,8 @@ function describePermissionMode(mode: PermissionMode): string {
         "",
         "  Governs what the AGENT does on this machine. Its reads run without",
         "  prompting; its writes, command execution, and anything needing a",
-        "  wallet signature ask for your approval first.",
+        "  wallet signature ask for your approval first. A write that tries to",
+        "  escape the project is blocked outright.",
         "",
         "  Commands you type yourself run as usual. Switch with /permissions set auto",
       ].join("\n");
@@ -535,20 +537,37 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const requestApproval = useCallback(
     (
       permission: PermissionClass,
-      details: { title: string; summary: string; approveLabel?: string; denyLabel?: string }
+      details: {
+        title: string;
+        summary: string;
+        approveLabel?: string;
+        denyLabel?: string;
+        /** Sandbox scope for a `write` (COW-2464): switches the decision to the
+         *  path-aware `decideWrite` so an out-of-project / protected target is
+         *  never auto-approved and a traversal is denied. */
+        scope?: WriteScope;
+      }
     ): Promise<boolean> => {
       const run = async (): Promise<boolean> => {
-        const decision = decide(permission, permissionMode);
+        const decision =
+          permission === "write" && details.scope
+            ? decideWrite(details.scope, permissionMode)
+            : decide(permission, permissionMode);
         if (decision === "allow") {
           // Reads are frequent and expected — stay quiet. Any other class being
           // auto-approved is a security-relevant event, so leave a trail.
           if (permission !== "read") {
-            addMessage("system", `Auto-approved a ${permission} action (${permissionMode} mode).`);
+            const scopeTag = permission === "write" && details.scope ? ` [${details.scope}]` : "";
+            addMessage("system", `Auto-approved a ${permission} action${scopeTag} (${permissionMode} mode).`);
           }
           return true;
         }
         if (decision === "deny") {
-          addMessage("error", `Refused a ${permission} action: not permitted by the current policy.`);
+          const why =
+            permission === "write" && details.scope === "invalid"
+              ? "the path escapes the project directory (blocked)"
+              : "not permitted by the current policy";
+          addMessage("error", `Refused a ${permission} action: ${why}.`);
           return false;
         }
         const approved = await new Promise<boolean>((resolve) => {
@@ -1107,25 +1126,20 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             setStreamingText((prev) => prev + token);
           },
           writeActor: async (actor) => {
-            // The backend controls the path — resolve it symlink-safe and refuse
-            // anything escaping the project before we even prompt (CWE-59).
-            let fullPath: string;
-            try {
-              fullPath = resolveSafeWritePath(actor.filePath);
-            } catch (err) {
-              addMessage("error", err instanceof Error ? err.message : String(err));
-              return false;
-            }
-            // Writing the generated actor is a `write`-class action (COW-2463):
-            // ask before it lands, since both the path and the code come from
-            // the backend. Default mode always prompts.
+            // The backend controls the path, so classify it against the project
+            // sandbox (COW-2464): the gate denies a traversal, always asks for
+            // an outside/protected target, and (in auto) may auto-approve a
+            // plain in-project write. Show the resolved target — a client-
+            // derived fact — not just the backend's filePath string.
+            const { scope, resolved, root } = classifyWritePath(actor.filePath);
             const approved = await requestApproval("write", {
               title: `Write ${actor.filePath}?`,
-              summary: `The agent wants to write the generated actor to ${actor.filePath} (${actor.code.length} bytes).`,
+              summary: `Target: ${resolved || actor.filePath}\nScope: ${scope} (project root: ${root})\n${actor.code.length} bytes from the agent.`,
+              scope,
             });
             if (!approved) return false;
-            mkdirSync(dirname(fullPath), { recursive: true });
-            writeFileSync(fullPath, actor.code + "\n", "utf-8");
+            mkdirSync(dirname(resolved), { recursive: true });
+            writeFileSync(resolved, actor.code + "\n", "utf-8");
             return true;
           },
           abort: handle.abort,
@@ -1422,25 +1436,19 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         const actors = extractActors(fullResponse);
         const writtenPaths: string[] = [];
         for (const actor of actors) {
-          // Symlink-safe resolution before prompting (CWE-59) — same guard as
-          // the agent path.
-          let fullPath: string;
-          try {
-            fullPath = resolveSafeWritePath(actor.filePath);
-          } catch (err) {
-            addMessage("error", err instanceof Error ? err.message : String(err));
-            continue;
-          }
+          // Same sandbox gate as the agent path (COW-2464).
+          const { scope, resolved, root } = classifyWritePath(actor.filePath);
           const approved = await requestApproval("write", {
             title: `Write ${actor.filePath}?`,
-            summary: `Write the generated actor to ${actor.filePath} (${actor.code.length} bytes).`,
+            summary: `Target: ${resolved || actor.filePath}\nScope: ${scope} (project root: ${root})\n${actor.code.length} bytes.`,
+            scope,
           });
           if (!approved) {
             addMessage("system", `Skipped ${actor.filePath} (not approved).`);
             continue;
           }
-          mkdirSync(dirname(fullPath), { recursive: true });
-          writeFileSync(fullPath, actor.code + "\n", "utf-8");
+          mkdirSync(dirname(resolved), { recursive: true });
+          writeFileSync(resolved, actor.code + "\n", "utf-8");
           addMessage(
             "system",
             `Wrote ${actor.className ?? "actor"} to ${actor.filePath}`
@@ -1564,7 +1572,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             addMessage(
               "system",
               result.mode === "auto"
-                ? "Permission mode set to auto (session-only). It governs the agent's actions; anything needing your wallet signature still always asks."
+                ? "Permission mode set to auto (session-only). The agent's in-project writes run without prompting; writes outside the project or to protected files, and anything needing your wallet signature, still always ask."
                 : "Permission mode set to default."
             );
           }

@@ -27,16 +27,19 @@ export type PermissionMode = "default" | "auto";
  *  refuse outright (fail closed) — used for unknown/unclassified actions. */
 export type PermissionDecision = "allow" | "ask" | "deny";
 
+import type { WriteScope } from "./path-sandbox.js";
+
 const KNOWN_CLASSES: readonly string[] = ["read", "write", "exec", "deploy", "sign"];
 
 /**
- * Classes `auto` mode may auto-approve beyond what `default` does. Deliberately
- * EMPTY today: auto-approving write/exec is unsafe without path sandboxing +
- * protected paths (COW-2464), and sign/deploy are irreversible/fund-spending so
- * they are always interactive regardless. Add "write"/"exec" here only once the
- * sandbox lands.
+ * Classes `auto` mode may auto-approve beyond what `default` does. `write` is
+ * enabled now that the path sandbox lands (COW-2464) — but ONLY for in-project,
+ * non-protected targets: the scope check lives in the gate (`decideWrite`), not
+ * here, because a path is not a policy input. `exec` stays out (no exec
+ * sandbox), and sign/deploy are irreversible/fund-spending so they are always
+ * interactive regardless.
  */
-const AUTO_APPROVED_CLASSES: readonly PermissionClass[] = [];
+const AUTO_APPROVED_CLASSES: readonly PermissionClass[] = ["write"];
 
 /**
  * Decide how an action of `permission` class is handled under `mode`.
@@ -66,4 +69,21 @@ export function decide(permission: string, mode: PermissionMode): PermissionDeci
   // write / exec
   if (mode === "auto" && AUTO_APPROVED_CLASSES.includes(cls)) return "allow";
   return "ask";
+}
+
+/**
+ * Decide a WRITE whose target has been classified by the path sandbox
+ * (COW-2464). Composes the sandbox scope with the pure class policy so `decide`
+ * stays path-agnostic:
+ *  - `invalid` (traversal / symlink escape / malformed) → `deny`, never a prompt.
+ *  - `outside` / `protected` → the `auto` relaxation is dropped (effective mode
+ *    is `default`), so they always `ask` — an external or sensitive-in-project
+ *    target is never written silently.
+ *  - `inside` → the normal `decide("write", mode)`: `allow` in auto, `ask` in
+ *    default.
+ */
+export function decideWrite(scope: WriteScope, mode: PermissionMode): PermissionDecision {
+  if (scope === "invalid") return "deny";
+  const effectiveMode: PermissionMode = scope === "inside" ? mode : "default";
+  return decide("write", effectiveMode);
 }
