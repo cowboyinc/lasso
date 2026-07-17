@@ -32,6 +32,7 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/runner list", description: "List active runners and routing hints" },
   { command: "/runner primary", description: "Set the primary runner preference" },
   { command: "/runner register", description: "Register this wallet as a runner" },
+  { command: "/simulate", description: "Run an actor handler locally against the PVM (advisory)" },
   { command: "/token approve", description: "Approve a token spender" },
   { command: "/token balance", description: "Check a token balance" },
   { command: "/token burn", description: "Burn tokens" },
@@ -243,6 +244,28 @@ export function parseCommand(input: string): CommandResult {
         return { type: "error", text: `Invalid address: ${address}. Usage: /faucet [address]` };
       }
       return { type: "execute", command: "faucet", args: address ? [address] : [] };
+    }
+
+    case "simulate": {
+      const { flags, positional } = parseFlags(parts.slice(1));
+      // Prefer explicit flags; only consume a positional for a slot a flag
+      // didn't fill, so `--actor x --handler get 0x7b7d` still reads 0x7b7d as
+      // the payload (positional[0]) instead of dropping it.
+      let pi = 0;
+      const take = (flagVal: string | undefined): string | undefined =>
+        flagVal !== undefined ? flagVal : positional[pi++];
+      const file = take(flags.actor);
+      const handler = take(flags.handler);
+      const payload = take(flags.payload);
+      if (!file || !handler) {
+        return {
+          type: "error",
+          text: "Usage: /simulate <file> <handler> [payload_hex]",
+        };
+      }
+      const args = [file, handler];
+      if (payload) args.push(payload);
+      return { type: "execute", command: "simulate", args };
     }
 
     case "walkthrough": {
@@ -782,6 +805,7 @@ function handleHelp(): CommandResult {
     "    /actor label <address|#> <text>         Set a label for an actor",
     "    /actor list                             List deployed actors",
     "    /actor logs <address>                   View actor logs",
+    "    /simulate <file> <handler> [payload]    Run a handler locally against the PVM (advisory)",
     "",
     "  Runner:",
     "    /runner list                            List active runners and local routing hints",
