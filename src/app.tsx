@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from "react";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, lstatSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { Box, Static, useApp } from "ink";
 import { Header } from "./components/Header.js";
@@ -53,7 +53,8 @@ import {
   type SimulateResult,
 } from "./simulate.js";
 import { makeReadFileTool, makeListTool, makeSearchTool } from "./local-fs-tools.js";
-import { makeWriteFileTool, makePatchFileTool } from "./local-fs-write-tools.js";
+import { makeWriteFileTool, makePatchFileTool, applyEdit } from "./local-fs-write-tools.js";
+import { diffLines } from "./diff.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
 import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
 import {
@@ -202,6 +203,57 @@ function formatLocalActorList(actors: ActorEntry[]): string {
     `  ${sep}`,
     ...rows.map((r) => `  ${r}`),
   ].join("\n");
+}
+
+/** Build a before→after diff preview for a write/patch approval (COW-2460).
+ *  Reads the current file (client-side; never leaves the machine) and renders a
+ *  compact diff so the user sees exactly what changes before approving. */
+const MAX_DIFF_PREVIEW_BYTES = 512 * 1024;
+
+function buildWriteDiff(
+  resolved: string,
+  a: { content?: unknown; old_string?: unknown; new_string?: unknown; replace_all?: unknown }
+): string {
+  // Bound the preview work: skip the diff for a large existing file or a large
+  // proposed content rather than loading megabytes just to render an approval.
+  const newBytes = typeof a.content === "string" ? Buffer.byteLength(a.content, "utf8") : 0;
+  if (newBytes > MAX_DIFF_PREVIEW_BYTES) return `\n(content is ${newBytes} bytes — diff preview omitted)`;
+  let before = "";
+  let exists = false;
+  try {
+    // lstat (not stat): a non-regular existing target — FIFO/socket/device — must
+    // NOT be read (a FIFO read would block the UI). The write tool refuses it too.
+    const st = lstatSync(resolved);
+    exists = true;
+    if (!st.isFile()) return "\n(target is not a regular file — diff omitted)";
+    if (st.size > MAX_DIFF_PREVIEW_BYTES) return `\n(existing file is ${st.size} bytes — diff preview omitted)`;
+  } catch {
+    /* ENOENT → a genuinely new file, before stays "" */
+  }
+  if (exists) {
+    // The file exists — a read failure here (EACCES, mode 000) must NOT be
+    // mistaken for a new file, or the prompt would show an all-additions diff
+    // for what is really an overwrite of existing content.
+    try {
+      before = readFileSync(resolved, "utf-8");
+    } catch {
+      return "\n(existing file is unreadable — diff omitted)";
+    }
+    if (before.includes("\0")) return "\n(existing file is binary — diff omitted)";
+  }
+
+  let after: string;
+  if (typeof a.content === "string") {
+    after = a.content;
+  } else if (typeof a.old_string === "string") {
+    const edit = applyEdit(before, a.old_string, String(a.new_string ?? ""), a.replace_all === true);
+    if (!edit.ok) return `\n(edit preview unavailable: ${edit.error})`;
+    after = edit.result;
+  } else {
+    return "";
+  }
+  const d = diffLines(before, after);
+  return `\nDiff (+${d.added} / -${d.removed})${!exists ? " — new file" : ""}:\n${d.text}`;
 }
 
 function formatSimulateResult(r: SimulateResult): string {
@@ -1386,16 +1438,17 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
                 const cls = classifyWritePath(p, process.cwd());
                 scope = cls.scope;
                 // Approving a write must convey WHAT changes, not just where — so
-                // derive a bounded preview from the args themselves rather than
-                // trusting the optional agent summary (which may be absent/wrong).
-                const a = req.args as { content?: unknown; old_string?: unknown; new_string?: unknown } | null;
-                let intent = "";
-                if (typeof a?.content === "string") {
-                  intent = `\nNew content (${Buffer.byteLength(a.content, "utf8")} bytes), preview:\n${a.content.slice(0, 400)}`;
-                } else if (typeof a?.old_string === "string") {
-                  intent = `\nReplace:\n${a.old_string.slice(0, 200)}\n  →\n${String(a?.new_string ?? "").slice(0, 200)}`;
-                }
-                writeSummary = `Target: ${cls.resolved || p}\nScope: ${cls.scope} (project root: ${cls.root})${intent}${
+                // render a before→after diff derived from the args + current file,
+                // rather than trusting the optional agent summary. Only for a
+                // classifiable in-project target (outside/invalid are denied).
+                const a = (req.args ?? {}) as {
+                  content?: unknown;
+                  old_string?: unknown;
+                  new_string?: unknown;
+                  replace_all?: unknown;
+                };
+                const diff = cls.scope === "invalid" || cls.scope === "outside" ? "" : buildWriteDiff(cls.resolved, a);
+                writeSummary = `Target: ${cls.resolved || p}\nScope: ${cls.scope} (project root: ${cls.root})${diff}${
                   req.summary ? `\n${req.summary}` : ""
                 }`;
               }
