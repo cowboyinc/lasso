@@ -15,9 +15,11 @@ test("sign and deploy ALWAYS ask — even in auto (hard invariant)", () => {
   }
 });
 
-test("write is auto-approved in auto (sandbox landed); exec still asks everywhere", () => {
+test("write and simulate are auto-approved in auto; exec still asks everywhere", () => {
   assert.equal(decide("write", "default"), "ask", "write/default");
   assert.equal(decide("write", "auto"), "allow", "write/auto");
+  assert.equal(decide("simulate", "default"), "ask", "simulate/default");
+  assert.equal(decide("simulate", "auto"), "allow", "simulate/auto");
   for (const mode of MODES) {
     assert.equal(decide("exec", mode), "ask", `exec/${mode}`);
   }
@@ -35,6 +37,7 @@ test("full policy matrix", () => {
   const expected: Record<string, Record<PermissionMode, PermissionDecision>> = {
     read: { default: "allow", auto: "allow" },
     write: { default: "ask", auto: "allow" },
+    simulate: { default: "ask", auto: "allow" },
     exec: { default: "ask", auto: "ask" },
     deploy: { default: "ask", auto: "ask" },
     sign: { default: "ask", auto: "ask" },
@@ -46,13 +49,14 @@ test("full policy matrix", () => {
   }
 });
 
-test("auto relaxes only `write` at the class level; sign/deploy/exec still ask", () => {
-  // `write` is the one class auto may auto-approve — and only for in-sandbox
-  // targets, which decideWrite enforces. Everything sensitive stays interactive.
+test("auto relaxes `write` and `simulate` at the class level; sign/deploy/exec still ask", () => {
+  // write is auto-approved only for in-sandbox targets (decideWrite); simulate
+  // is sandboxed local compute. Everything else sensitive stays interactive.
   for (const cls of ["exec", "deploy", "sign"]) {
     assert.equal(decide(cls, "auto"), "ask", cls);
   }
   assert.equal(decide("write", "auto"), "allow", "write class-level auto-approve");
+  assert.equal(decide("simulate", "auto"), "allow", "simulate class-level auto-approve");
 });
 
 // ── decideWrite: sandbox scope × mode (COW-2464) ─────────────────────────────

@@ -291,6 +291,34 @@ test("/permissions rejects an unknown mode", () => {
   assert.equal(bare.type, "error");
 });
 
+test("/simulate parses file + handler + optional payload", () => {
+  assert.deepEqual(parseCommand("/simulate actors/x/main.py get"), {
+    type: "execute",
+    command: "simulate",
+    args: ["actors/x/main.py", "get"],
+  });
+  assert.deepEqual(parseCommand("/simulate actors/x/main.py get 0x7b7d"), {
+    type: "execute",
+    command: "simulate",
+    args: ["actors/x/main.py", "get", "0x7b7d"],
+  });
+  const bad = parseCommand("/simulate actors/x/main.py");
+  assert.equal(bad.type, "error");
+  assert.match(bad.text, /<file> <handler>/);
+});
+
+test("/simulate keeps a positional payload after --actor/--handler flags", () => {
+  assert.deepEqual(parseCommand("/simulate --actor actors/x/main.py --handler get 0x7b7d"), {
+    type: "execute",
+    command: "simulate",
+    args: ["actors/x/main.py", "get", "0x7b7d"],
+  });
+});
+
+test("/simulate appears in slash suggestions", () => {
+  assert.ok(getSlashCommandSuggestions("/sim").some((i) => i.command === "/simulate"));
+});
+
 test("/permissions appears in slash suggestions", () => {
   assert.ok(
     getSlashCommandSuggestions("/perm").some((item) => item.command === "/permissions")
