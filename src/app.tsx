@@ -52,6 +52,7 @@ import {
   type SimulateArgs,
   type SimulateResult,
 } from "./simulate.js";
+import { makeReadFileTool, makeListTool, makeSearchTool } from "./local-fs-tools.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
 import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
 import {
@@ -1163,15 +1164,20 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         // backend's own knowledge tool replaces the local knowledge pack.
         const content = prompt + collectLocalFileContext(prompt);
 
-        // Local tool registry (COW-2455). Only signing is registered/advertised
-        // until the permission gate + sandbox land (COW-2463/2464); the backend
-        // only emits client_tool_request for advertised tools.
+        // Local tool registry (COW-2455). Registered names are advertised to
+        // the backend; it only emits client_tool_request for advertised tools.
         const toolRegistry = new ToolRegistry();
         toolRegistry.register(makeSignTool(signHashLocally));
         // Local simulate (COW-2461): advertised to the backend so it can run
         // simulate_actor on this machine instead of a runner round-trip. Gated
         // as the `simulate` class (auto-approved in auto, asks in default).
         toolRegistry.register(makeSimulateTool());
+        // Local FS read tools (COW-2458). `read` class runs without a prompt,
+        // so the tools themselves DENY anything not plainly in-project
+        // (protected/outside/traversal) — read results flow to the backend.
+        toolRegistry.register(makeReadFileTool());
+        toolRegistry.register(makeListTool());
+        toolRegistry.register(makeSearchTool());
 
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,

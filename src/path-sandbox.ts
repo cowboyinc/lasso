@@ -48,16 +48,20 @@ function isAtOrUnder(child: string, parent: string): boolean {
 /** In-project paths that must never be written without an explicit prompt. */
 const PROTECTED_DIRS = new Set([".git", ".cowboy", ".ssh", ".hg", ".svn"]);
 const PROTECTED_BASENAME =
-  /^(\.env(\..+)?|.*\.(key|pem|keystore|p12)|id_(rsa|ecdsa|ed25519).*|\.(bashrc|zshrc|profile|bash_profile|npmrc)|package-lock\.json|bun\.lockb|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock)$/i;
+  /^(\.env.*|.*\.(key|pem|keystore|p12|pfx)|id_(rsa|ecdsa|ed25519).*|\.(bashrc|zshrc|profile|bash_profile|npmrc|netrc|pypirc)|package-lock\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock)$/i;
 
-function isProtectedRelative(rel: string): boolean {
+/** Is this ROOT-RELATIVE path protected? Exported for the local FS tools
+ *  (COW-2458): reads/list/search must skip protected entries entirely — their
+ *  contents (and even their names) would otherwise flow to the hosted backend. */
+export function isProtectedRelative(rel: string): boolean {
   const segments = rel.split(sep).filter(Boolean);
-  // Case-insensitive: on default macOS (case-insensitive fs) `.GIT/config` IS
-  // `.git/config`, and even on a case-sensitive system a `.GIT` twin is
-  // deceptive enough to warrant the prompt. PROTECTED_BASENAME carries /i.
-  if (segments.some((s) => PROTECTED_DIRS.has(s.toLowerCase()))) return true;
-  const base = segments[segments.length - 1] ?? "";
-  return PROTECTED_BASENAME.test(base);
+  // A protected NAME anywhere in the path protects its descendants too, so a
+  // child of `.env.d/`, `wallet.key/`, `.ssh/` … is protected as well — not
+  // just the final segment. Case-insensitive (default macOS fs collapses case,
+  // and a `.GIT` twin is deceptive regardless); PROTECTED_BASENAME carries /i.
+  return segments.some(
+    (s) => PROTECTED_DIRS.has(s.toLowerCase()) || PROTECTED_BASENAME.test(s)
+  );
 }
 
 /**
@@ -125,7 +129,14 @@ export function classifyWritePath(
   if (!isAtOrUnder(realTarget, realRoot)) {
     return { scope: "invalid", resolved: realTarget, root: realRoot };
   }
-  if (isProtectedRelative(relative(realRoot, realTarget))) {
+  // Protected by EITHER its real target OR its lexical name: a symlink named
+  // `.env` (or `.ssh/config`) pointing at an innocuous-looking file must still
+  // be treated as protected — otherwise a read/write through the protected
+  // NAME would be allowed just because the link resolves elsewhere.
+  if (
+    isProtectedRelative(relative(realRoot, realTarget)) ||
+    isProtectedRelative(relative(realRoot, lexical))
+  ) {
     return { scope: "protected", resolved: realTarget, root: realRoot };
   }
   return { scope: "inside", resolved: realTarget, root: realRoot };
