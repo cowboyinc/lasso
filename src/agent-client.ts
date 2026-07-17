@@ -21,6 +21,7 @@ export type AgentEvent =
   | ToolPendingSignatureEvent
   | ToolPendingQuestionEvent
   | RunStatusEvent
+  | ClientToolRequestEvent
   | PlanEvent
   | SecretRequestEvent
   | IterationStartEvent
@@ -118,6 +119,21 @@ export interface ToolPendingSignatureEvent extends BaseEvent {
     maxFeeCby?: string;
     payload: unknown;
   };
+}
+
+/** Generic client-tool request (COW-2455): the backend asks the client to run a
+ *  named local tool and awaits the result over the same stream. Generalizes
+ *  ToolPendingSignatureEvent. Provisional wire shape (backend owner traveling);
+ *  decoded ONLY via requestFromClientToolEvent in client-tool-bridge.ts, and
+ *  INERT until the backend emits it. */
+export interface ClientToolRequestEvent extends BaseEvent {
+  type: "client_tool_request";
+  iteration: number;
+  toolUseId: string;
+  toolName: string;
+  args: unknown;
+  /** Human summary for the approval UI (COW-2463). */
+  summary?: string;
 }
 
 /** A single step in the agent's live plan/todo checklist (doc 61 T1.4). */
@@ -273,6 +289,10 @@ export interface AgentChatRequest {
    *  tests, and self-corrects across iterations before reporting). "guided" =
    *  the legacy build-then-stop wizard. Omitted: server default (guided). */
   mode?: "guided" | "agent";
+  /** Local tool names this client can execute (COW-2456 capability handshake).
+   *  The backend only emits `client_tool_request` for advertised tools; a
+   *  backend that doesn't consume this yet simply ignores it. */
+  clientTools?: string[];
 }
 
 export interface StreamHandle {
@@ -350,4 +370,57 @@ export function streamAgentChat(
   }
 
   return { events: generate(), abort: () => controller.abort() };
+}
+
+/** Resolve (or cancel) a `tool_pending_signature` on the backend. Mirrors the
+ *  web frontend's TxPreviewModal.postSignCallback: the client signs
+ *  `preview.payload.hashHex` locally and posts `{r,s,v}` here; the backend's
+ *  signature broker rebuilds and submits the tx it prepared. This is the
+ *  client-tool bridge (COW-2455) specialized to signing (COW-2465). */
+export async function postSignCallback(
+  dashboardUrl: string,
+  body: {
+    sessionId: string;
+    toolUseId: string;
+    action: "sign" | "cancel";
+    signature?: { r: string; s: string; v: number };
+  }
+): Promise<void> {
+  const base = dashboardUrl.replace(/\/$/, "");
+  const resp = await fetch(`${base}/api/agent/sign-callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`sign-callback ${resp.status}: ${text.slice(0, 200)}`);
+  }
+}
+
+/** Resume a `client_tool_request` by posting the local tool's result — the
+ *  generic sibling of postSignCallback (COW-2455). Hits the assumed
+ *  `/api/agent/tool-result` endpoint; INERT until the backend implements it, so
+ *  signing keeps flowing over postSignCallback (dual-path) meanwhile. */
+export async function postToolResult(
+  dashboardUrl: string,
+  body: {
+    sessionId: string;
+    toolUseId: string;
+    status: "ok" | "error" | "cancelled";
+    output?: unknown;
+    /** Present only when status is "cancelled". */
+    reason?: string;
+  }
+): Promise<void> {
+  const base = dashboardUrl.replace(/\/$/, "");
+  const resp = await fetch(`${base}/api/agent/tool-result`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`tool-result ${resp.status}: ${text.slice(0, 200)}`);
+  }
 }

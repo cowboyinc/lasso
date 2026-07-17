@@ -200,3 +200,154 @@ test("done ends the turn: trailing events are ignored", async () => {
   assert.equal(result.finalText, "answer");
   assert.ok(!r.tokens.includes("STALE"));
 });
+
+import { hashHexFromPayload } from "./agent-turn.js";
+import type {
+  PendingSignatureRequest,
+  PendingSignatureResult,
+} from "./agent-turn.js";
+
+function streamStart(): AgentEvent {
+  return {
+    type: "stream_start", seq: 0, ts: 1, protocol: 1,
+    conversationId: "c", sessionId: "sess-1", model: "cowboy-actor",
+  } as AgentEvent;
+}
+
+function pendingSig(hashHex: string | undefined): AgentEvent {
+  return {
+    type: "tool_pending_signature", seq: 1, ts: 2, iteration: 0, toolUseId: "sig1",
+    preview: { kind: "deploy", summary: "Deploy Counter",
+      payload: hashHex === undefined ? { nonce: 0 } : { hashHex, nonce: 0 } },
+  } as AgentEvent;
+}
+
+test("signature bridge: signs, resumes the loop, reaches done", async () => {
+  const r = recordingIO();
+  const calls: PendingSignatureRequest[] = [];
+  r.io.resolvePendingSignature = async (req): Promise<PendingSignatureResult> => {
+    calls.push(req);
+    return "signed";
+  };
+  const result = await runAgentTurn(
+    eventsOf(
+      streamStart(),
+      pendingSig("0xdeadbeef"),
+      { type: "done", seq: 2, ts: 3, totalIterations: 1, finalAssistantContent: "Deployed." } as AgentEvent
+    ),
+    r.io
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].sessionId, "sess-1");
+  assert.equal(calls[0].toolUseId, "sig1");
+  assert.equal(calls[0].hashHex, "0xdeadbeef");
+  assert.equal(r.aborted.value, false, "signed → loop must continue, not abort");
+  assert.equal(result.finalText, "Deployed.");
+  assert.equal(result.error, null);
+});
+
+test("signature bridge: cancelled aborts with no error", async () => {
+  const r = recordingIO();
+  r.io.resolvePendingSignature = async () => "cancelled";
+  const result = await runAgentTurn(eventsOf(streamStart(), pendingSig("0x01")), r.io);
+  assert.equal(r.aborted.value, true);
+  assert.equal(result.error, null);
+});
+
+test("signature bridge: signer error aborts and surfaces the error", async () => {
+  const r = recordingIO();
+  r.io.resolvePendingSignature = async () => ({ error: "cowboy sign-hash failed" });
+  const result = await runAgentTurn(eventsOf(streamStart(), pendingSig("0x01")), r.io);
+  assert.equal(r.aborted.value, true);
+  assert.equal(result.error, "cowboy sign-hash failed");
+});
+
+test("signature bridge: no resolver → legacy fallback + abort", async () => {
+  const r = recordingIO(); // no resolvePendingSignature
+  const result = await runAgentTurn(eventsOf(streamStart(), pendingSig("0x01")), r.io);
+  assert.equal(r.aborted.value, true);
+  assert.equal(result.error, null);
+  assert.ok(r.system.some((s) => /wallet signature/i.test(s)), "shows fallback notice");
+});
+
+test("signature bridge: missing hashHex falls back (never signs a bad payload)", async () => {
+  const r = recordingIO();
+  let called = false;
+  r.io.resolvePendingSignature = async () => { called = true; return "signed"; };
+  await runAgentTurn(eventsOf(streamStart(), pendingSig(undefined)), r.io);
+  assert.equal(called, false, "no hashHex → resolver must not be invoked");
+  assert.equal(r.aborted.value, true);
+});
+
+test("hashHexFromPayload extracts / rejects", () => {
+  assert.equal(hashHexFromPayload({ hashHex: "0xabc" }), "0xabc");
+  assert.equal(hashHexFromPayload({ nonce: 1 }), null);
+  assert.equal(hashHexFromPayload({ hashHex: 123 }), null);
+  assert.equal(hashHexFromPayload(null), null);
+  assert.equal(hashHexFromPayload("nope"), null);
+});
+
+import type { ClientToolRequest } from "./client-tool-bridge.js";
+import type { ClientToolTurnOutcome } from "./agent-turn.js";
+
+function clientToolReq(): AgentEvent {
+  return {
+    type: "client_tool_request", seq: 1, ts: 2, iteration: 0,
+    toolUseId: "ct1", toolName: "local_read_file",
+    args: { path: "a.py" }, summary: "read a.py",
+  } as AgentEvent;
+}
+
+test("client tool: continue → result posted, loop resumes to done, no abort", async () => {
+  const r = recordingIO();
+  const calls: ClientToolRequest[] = [];
+  r.io.dispatchClientTool = async (req): Promise<ClientToolTurnOutcome> => {
+    calls.push(req);
+    return "continue";
+  };
+  const result = await runAgentTurn(
+    eventsOf(
+      streamStart(),
+      clientToolReq(),
+      { type: "done", seq: 2, ts: 3, totalIterations: 1, finalAssistantContent: "read it" } as AgentEvent
+    ),
+    r.io
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolName, "local_read_file");
+  assert.deepEqual(calls[0].args, { path: "a.py" });
+  assert.equal(r.aborted.value, false, "continue → must not abort");
+  assert.equal(result.finalText, "read it");
+  assert.equal(result.error, null);
+});
+
+test("client tool: stop → aborts with no error", async () => {
+  const r = recordingIO();
+  r.io.dispatchClientTool = async () => "stop";
+  const result = await runAgentTurn(eventsOf(streamStart(), clientToolReq()), r.io);
+  assert.equal(r.aborted.value, true);
+  assert.equal(result.error, null);
+});
+
+test("client tool: dispatch error → aborts and surfaces the error", async () => {
+  const r = recordingIO();
+  r.io.dispatchClientTool = async () => ({ error: "tool blew up" });
+  const result = await runAgentTurn(eventsOf(streamStart(), clientToolReq()), r.io);
+  assert.equal(r.aborted.value, true);
+  assert.equal(result.error, "tool blew up");
+});
+
+test("client tool: no dispatcher → unsupported notice, turn continues (no abort)", async () => {
+  const r = recordingIO(); // no dispatchClientTool
+  const result = await runAgentTurn(
+    eventsOf(
+      streamStart(),
+      clientToolReq(),
+      { type: "done", seq: 2, ts: 3, totalIterations: 1, finalAssistantContent: "ok" } as AgentEvent
+    ),
+    r.io
+  );
+  assert.equal(r.aborted.value, false);
+  assert.ok(r.system.some((s) => /unsupported local tool: local_read_file/.test(s)));
+  assert.equal(result.finalText, "ok");
+});
