@@ -53,6 +53,7 @@ import {
   type SimulateResult,
 } from "./simulate.js";
 import { makeReadFileTool, makeListTool, makeSearchTool } from "./local-fs-tools.js";
+import { makeWriteFileTool, makePatchFileTool } from "./local-fs-write-tools.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
 import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
 import {
@@ -411,10 +412,10 @@ function describePermissionMode(mode: PermissionMode): string {
         "  Permission mode: auto",
         "",
         "  Governs what the AGENT does on this machine. Its reads and its writes",
-        "  INSIDE the project run without prompting. Still always asks: writes",
-        "  outside the project or to protected files (.git, .cowboy, keys, .env,",
-        "  lockfiles), command execution, and anything needing a wallet signature.",
-        "  A path that tries to escape the project is blocked outright.",
+        "  INSIDE the project run without prompting. Still always asks: writes to",
+        "  protected files (.git, .cowboy, keys, .env, lockfiles), command",
+        "  execution, and anything needing a wallet signature. Writes outside the",
+        "  project — or a path that tries to escape it — are blocked outright.",
         "",
         "  Commands you type yourself (/actor deploy, /transfer, …) run as usual",
         "  — that's your own intent, not the agent's.",
@@ -1178,6 +1179,11 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         toolRegistry.register(makeReadFileTool());
         toolRegistry.register(makeListTool());
         toolRegistry.register(makeSearchTool());
+        // Local FS write tools (COW-2458 pt.2). `write` class → gated per
+        // decideWrite (traversal denied, outside/protected always ask,
+        // in-project auto-approves only in auto mode).
+        toolRegistry.register(makeWriteFileTool());
+        toolRegistry.register(makePatchFileTool());
 
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,
@@ -1361,9 +1367,37 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               return "continue";
             }
 
+            // For a write-class tool, classify its target path so the gate is
+            // scope-aware (COW-2464): a traversal is denied, an outside/protected
+            // target always asks (even in auto), an in-project one may auto-run.
+            // Write tools take the target as `args.path` (convention).
+            let scope: WriteScope | undefined;
+            let writeSummary: string | undefined;
+            if (permission === "write") {
+              const p = (req.args as { path?: unknown } | null)?.path;
+              if (typeof p === "string") {
+                const cls = classifyWritePath(p, process.cwd());
+                scope = cls.scope;
+                // Approving a write must convey WHAT changes, not just where — so
+                // derive a bounded preview from the args themselves rather than
+                // trusting the optional agent summary (which may be absent/wrong).
+                const a = req.args as { content?: unknown; old_string?: unknown; new_string?: unknown } | null;
+                let intent = "";
+                if (typeof a?.content === "string") {
+                  intent = `\nNew content (${Buffer.byteLength(a.content, "utf8")} bytes), preview:\n${a.content.slice(0, 400)}`;
+                } else if (typeof a?.old_string === "string") {
+                  intent = `\nReplace:\n${a.old_string.slice(0, 200)}\n  →\n${String(a?.new_string ?? "").slice(0, 200)}`;
+                }
+                writeSummary = `Target: ${cls.resolved || p}\nScope: ${cls.scope} (project root: ${cls.root})${intent}${
+                  req.summary ? `\n${req.summary}` : ""
+                }`;
+              }
+            }
+
             const approved = await requestApproval(permission, {
               title: `Allow ${req.toolName}?`,
-              summary: req.summary ?? `The agent wants to run ${req.toolName}.`,
+              summary: writeSummary ?? req.summary ?? `The agent wants to run ${req.toolName}.`,
+              scope,
             });
             if (!approved) {
               // User denial (or a fail-closed refusal) → post a cancelled result
@@ -1673,7 +1707,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             addMessage(
               "system",
               result.mode === "auto"
-                ? "Permission mode set to auto (session-only). The agent's in-project writes run without prompting; writes outside the project or to protected files, and anything needing your wallet signature, still always ask."
+                ? "Permission mode set to auto (session-only). The agent's in-project writes run without prompting; writes to protected files and anything needing your wallet signature still always ask, and writes outside the project are refused."
                 : "Permission mode set to default."
             );
           }
