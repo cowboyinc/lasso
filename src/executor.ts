@@ -7,13 +7,25 @@ import { join } from "node:path";
 export function executeCowboyAsync(
   args: string[],
   stdin?: string,
+  signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("aborted before spawn"));
+      return;
+    }
     // Default stdio (all three piped) lets us write the optional `stdin`
     // payload to the child out-of-band, instead of placing the secret on argv
     // where `ps` / `/proc/<pid>/cmdline` would expose it. For commands that
     // do not consume stdin we simply close the pipe without writing.
     const child = spawn("cowboy", args);
+
+    // Abort (timeout or Ctrl-C, COW-2457) terminates the child so a wedged CLI
+    // can't keep running past a cancel.
+    const onAbort = () => {
+      child.kill("SIGTERM");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     if (stdin !== undefined) {
       child.stdin.end(stdin);
@@ -33,10 +45,12 @@ export function executeCowboyAsync(
     });
 
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
 
     child.on("error", (err) => {
+      signal?.removeEventListener("abort", onAbort);
       reject(err);
     });
   });

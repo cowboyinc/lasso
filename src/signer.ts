@@ -41,14 +41,17 @@ export function parseSignHashOutput(stdout: string): EcdsaSignature {
 }
 
 /** Sign a prepared 32-byte tx hash with the local key via the `cowboy` CLI.
- *  Throws on CLI failure or malformed output. */
-export async function signHashLocally(hashHex: string): Promise<EcdsaSignature> {
-  const { stdout, stderr, exitCode } = await executeCowboyAsync([
-    "transaction",
-    "sign-hash",
-    "--hash",
-    hashHex,
-  ]);
+ *  Throws on CLI failure or malformed output. `signal` (COW-2457) kills the CLI
+ *  child if the dispatch times out or the user cancels. */
+export async function signHashLocally(
+  hashHex: string,
+  signal?: AbortSignal,
+): Promise<EcdsaSignature> {
+  const { stdout, stderr, exitCode } = await executeCowboyAsync(
+    ["transaction", "sign-hash", "--hash", hashHex],
+    undefined,
+    signal,
+  );
   if (exitCode !== 0) {
     const detail = stderr.trim() || stdout.trim();
     throw new Error(`cowboy sign-hash failed (exit ${exitCode}): ${detail.slice(0, 200)}`);
