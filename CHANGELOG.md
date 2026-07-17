@@ -4,6 +4,7 @@
 
 ### Changed
 - The AI builder no longer emits explicit `charge_gas()` calls in generated actors, and the walkthrough / reference docs no longer instruct them — gas (cycles/cells) is metered automatically by the PVM as code runs.
+- **Wallet balance in the status bar (COW-2466).** The status bar now shows the active wallet's on-chain balance next to its address (`Wallet: 0x1234…abcd (5,000 CBY)`), fetched on launch, polled every 20s, and refreshed immediately after a `/faucet` drip. Balances are converted from base units (1 CBY = 10⁹) to CBY for display.
 - **lasso works from the project root (COW-2459).** On launch, lasso walks up from the current directory to the nearest ancestor holding a `.cowboy/` directory and works from there — so the console, its config, the write sandbox, and the local FS tools are all rooted at the project even when you start lasso in a subdirectory (like `git`). When it moves up into a parent project it says so; if no project is found anywhere above, it stays put and `/init` creates one.
 
 ### Added

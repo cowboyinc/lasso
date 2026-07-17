@@ -598,6 +598,9 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
   const approvalRef = useRef<((approved: boolean) => void) | null>(null);
   const approvalChainRef = useRef<Promise<void>>(Promise.resolve());
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
+  // Active wallet's on-chain balance for the status bar (COW-2466). null until
+  // first fetched / when unknown.
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -758,6 +761,32 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
       cancelled = true;
     };
   }, [projectReady, session.walletAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wallet balance for the status bar (COW-2466): fetch when the wallet is
+  // known, then poll so it reflects faucet drips / deploys / transfers.
+  const refreshBalance = useCallback(async () => {
+    if (!session.walletAddress) return;
+    const bal = await fetchAccountBalance(session.validatorUrl, session.walletAddress);
+    setWalletBalance(bal);
+  }, [session.validatorUrl, session.walletAddress]);
+
+  useEffect(() => {
+    if (!session.walletAddress) {
+      setWalletBalance(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      const bal = await fetchAccountBalance(session.validatorUrl, session.walletAddress!);
+      if (!cancelled) setWalletBalance(bal);
+    };
+    tick();
+    const id = setInterval(tick, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [session.walletAddress, session.validatorUrl]);
 
   const updateRunnerPrefs = useCallback((patch: Partial<RunnerPreferences>) => {
     setSession((prev) => {
@@ -1092,6 +1121,8 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
               `  Tx:        ${result.txHash}`,
             ].join("\n")
           );
+          // Reflect the drip in the status bar without waiting for the poll.
+          void refreshBalance();
         } catch (err: unknown) {
           addMessage("error", `Faucet request failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -1189,7 +1220,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         setIsExecuting(false);
       }
     },
-    [session, addMessage, updateRunnerPrefs]
+    [session, addMessage, updateRunnerPrefs, refreshBalance]
   );
 
   const runAgentPrompt = useCallback(
@@ -1939,6 +1970,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         validatorUrl={session.validatorUrl}
         hasKey={projectReady}
         walletAddress={session.walletAddress}
+        walletBalance={walletBalance}
         cowboyVersion={cowboyVersion}
         runnerPreferences={session.runnerPreferences}
         runnerUrl={session.runnerUrl}

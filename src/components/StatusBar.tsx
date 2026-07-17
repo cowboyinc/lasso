@@ -8,6 +8,7 @@ interface StatusBarProps {
   validatorUrl: string;
   hasKey: boolean;
   walletAddress: string | null;
+  walletBalance: number | null;
   cowboyVersion: string | null;
   runnerPreferences: RunnerPreferences;
   runnerUrl: string | null;
@@ -15,10 +16,15 @@ interface StatusBarProps {
   permissionMode: PermissionMode;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl, permissionMode }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, walletBalance, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl, permissionMode }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
+  // Account balances are in base units (1 CBY = 10^9); convert for display.
+  const balanceLabel =
+    walletBalance != null
+      ? `${(walletBalance / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 })} CBY`
+      : null;
 
   // Mirrors handlePromptSubmit's routing rule: dashboard agent first,
   // direct runner second — so the label can't disagree with behavior.
@@ -34,6 +40,11 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, 
           <>
             {"  "}|{"  "}
             Wallet: <Text color="yellow">{shortWallet}</Text>
+            {balanceLabel && (
+              <>
+                {" "}(<Text color="green">{balanceLabel}</Text>)
+              </>
+            )}
           </>
         )}
         {"  "}|{"  "}
