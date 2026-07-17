@@ -86,14 +86,17 @@ export function decide(permission: string, mode: PermissionMode): PermissionDeci
  * (COW-2464). Composes the sandbox scope with the pure class policy so `decide`
  * stays path-agnostic:
  *  - `invalid` (traversal / symlink escape / malformed) → `deny`, never a prompt.
- *  - `outside` / `protected` → the `auto` relaxation is dropped (effective mode
- *    is `default`), so they always `ask` — an external or sensitive-in-project
- *    target is never written silently.
+ *  - `outside` (a well-formed path outside the project) → `deny`. The agent has
+ *    no business writing outside the user's project, and canonicalizing an
+ *    external target for a safe prompt is a rabbit hole (system dirs like macOS
+ *    `/tmp` are themselves symlinks), so agent writes are confined to the project.
+ *  - `protected` (sensitive in-project file) → the `auto` relaxation is dropped
+ *    (effective mode `default`), so it always `ask`s — never written silently.
  *  - `inside` → the normal `decide("write", mode)`: `allow` in auto, `ask` in
  *    default.
  */
 export function decideWrite(scope: WriteScope, mode: PermissionMode): PermissionDecision {
-  if (scope === "invalid") return "deny";
+  if (scope === "invalid" || scope === "outside") return "deny";
   const effectiveMode: PermissionMode = scope === "inside" ? mode : "default";
   return decide("write", effectiveMode);
 }
