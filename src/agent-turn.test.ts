@@ -15,6 +15,8 @@ interface Recorded {
   tokens: string[];
   wrote: ExtractedActor[];
   aborted: { value: boolean };
+  /** Flip to false to simulate the user denying the write approval. */
+  approveWrites: { value: boolean };
 }
 
 function recordingIO(): Recorded {
@@ -22,11 +24,16 @@ function recordingIO(): Recorded {
   const tokens: string[] = [];
   const wrote: ExtractedActor[] = [];
   const aborted = { value: false };
+  const approveWrites = { value: true };
   return {
     io: {
       onSystem: (text) => system.push(text),
       onToken: (token) => tokens.push(token),
-      writeActor: (actor) => wrote.push(actor),
+      writeActor: async (actor) => {
+        if (!approveWrites.value) return false;
+        wrote.push(actor);
+        return true;
+      },
       abort: () => {
         aborted.value = true;
       },
@@ -35,6 +42,7 @@ function recordingIO(): Recorded {
     tokens,
     wrote,
     aborted,
+    approveWrites,
   };
 }
 
@@ -84,6 +92,24 @@ test("tool_pending_question renders the question + choices and calls onAskUser",
   assert.ok(line, "renders the question");
   assert.match(line!, /1\. Counter/);
   assert.match(line!, /2\. Token/);
+});
+
+test("write_actor denied at the approval gate: not written, no deploy hint, turn continues", async () => {
+  const r = recordingIO();
+  r.approveWrites.value = false; // user says no at the prompt
+  const result = await runAgentTurn(
+    eventsOf(
+      { type: "stream_start", seq: 0, ts: 1, protocol: 1, conversationId: "c", sessionId: "s", model: "cowboy-actor" },
+      { type: "tool_use_start", seq: 1, ts: 2, iteration: 0, toolUseId: "t1", toolName: "write_actor", displayName: "Write actor" },
+      { type: "tool_result", seq: 2, ts: 3, iteration: 0, toolUseId: "t1", status: "ok", durationMs: 10, output: { status: "ok", language: "python", code: COUNTER_CODE, warnings: [], notes: "" } },
+      { type: "done", seq: 3, ts: 4, totalIterations: 1, finalAssistantContent: "ok" }
+    ),
+    r.io
+  );
+  assert.equal(r.wrote.length, 0, "denied write must not persist");
+  assert.match(r.system.join("\n"), /write skipped.*not approved/);
+  assert.equal(result.wrote.length, 0);
+  assert.equal(result.error, null, "a declined write is not a turn error");
 });
 
 test("plan event renders a checklist; update_plan tool start/result are suppressed", async () => {

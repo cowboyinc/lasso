@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { VERSION } from "../constants.js";
 import type { RunnerPreferences } from "../types.js";
+import type { PermissionMode } from "../permissions.js";
 
 interface StatusBarProps {
   validatorUrl: string;
@@ -11,9 +12,10 @@ interface StatusBarProps {
   runnerPreferences: RunnerPreferences;
   runnerUrl: string | null;
   dashboardUrl: string | null;
+  permissionMode: PermissionMode;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl, permissionMode }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
@@ -36,6 +38,8 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress, cowboyVersion, 
         )}
         {"  "}|{"  "}
         AI: <Text color={aiMode === "off" ? "red" : "green"}>{aiMode}</Text>
+        {"  "}|{"  "}
+        Mode: <Text color={permissionMode === "auto" ? "yellow" : "green"}>{permissionMode}</Text>
       </Text>
       <Text dimColor>
         {cowboyVersion && <>cli v{cowboyVersion}{"  "}|{"  "}</>}

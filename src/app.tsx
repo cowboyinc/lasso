@@ -46,6 +46,8 @@ import {
 import { runAgentTurn } from "./agent-turn.js";
 import { signHashLocally, type EcdsaSignature } from "./signer.js";
 import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME } from "./client-tool-bridge.js";
+import { decide, type PermissionClass, type PermissionMode } from "./permissions.js";
+import { resolveSafeWritePath } from "./safe-path.js";
 import {
   collectLocalFileContext,
   docsIndex,
@@ -54,7 +56,7 @@ import {
   retrieveSections,
 } from "./knowledge/index.js";
 import { WalkthroughPager } from "./components/WalkthroughPager.js";
-import { SignatureApproval } from "./components/SignatureApproval.js";
+import { ApprovalPrompt } from "./components/ApprovalPrompt.js";
 import { stripTerminalControl } from "./terminal-sanitize.js";
 import { WALKTHROUGH_LESSONS } from "./walkthrough.js";
 import { checkForUpdate } from "./update-check.js";
@@ -367,6 +369,41 @@ interface IndexedMessage extends ConsoleMessage {
   id: number;
 }
 
+/** A sensitive action awaiting explicit y/n approval (COW-2463). The fields are
+ *  what the ApprovalPrompt renders; the resolver lives in a ref. */
+interface PendingApproval {
+  title: string;
+  summary: string;
+  approveLabel: string;
+  denyLabel: string;
+}
+
+/** Human explanation of what a mode does, shown by `/permissions` (COW-2463). */
+function describePermissionMode(mode: PermissionMode): string {
+  return mode === "auto"
+    ? [
+        "  Permission mode: auto",
+        "",
+        "  Governs what the AGENT does on this machine. Its reads run without",
+        "  prompting; its writes and command execution will too once sandboxing",
+        "  lands (none exist yet, so they still ask). Anything that needs your",
+        "  wallet to sign ALWAYS asks, even in auto.",
+        "",
+        "  Commands you type yourself (/actor deploy, /transfer, …) run as usual",
+        "  — that's your own intent, not the agent's.",
+        "  Session-only: resets to default when you restart lasso.",
+      ].join("\n")
+    : [
+        "  Permission mode: default",
+        "",
+        "  Governs what the AGENT does on this machine. Its reads run without",
+        "  prompting; its writes, command execution, and anything needing a",
+        "  wallet signature ask for your approval first.",
+        "",
+        "  Commands you type yourself run as usual. Switch with /permissions set auto",
+      ].join("\n");
+}
+
 // Map command name to cowboy CLI args
 function commandToCowboyArgs(command: string, args: string[]): string[] {
   switch (command) {
@@ -463,11 +500,17 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
-  // A wallet signature awaiting explicit user approval (COW-2455 / COW-2463).
-  // `pendingSignature` holds the tx summary to show; the ref's resolver is fired
-  // by the approval affordance with the user's y/n decision.
-  const [pendingSignature, setPendingSignature] = useState<string | null>(null);
-  const signatureApprovalRef = useRef<((approved: boolean) => void) | null>(null);
+  // Session-only permission mode (COW-2463). Deliberately NOT part of
+  // SessionState / config: it must never persist, so a repo or tool can't leave
+  // the client in `auto` for a later session. Resets to `default` every launch.
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
+  // A sensitive action awaiting explicit user approval (COW-2455 / COW-2463).
+  // `pendingApproval` holds what to show; the ref's resolver is fired by the
+  // ApprovalPrompt with the user's y/n decision. `approvalChainRef` serializes
+  // requests so two tools can never race two prompts onto the screen at once.
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const approvalRef = useRef<((approved: boolean) => void) | null>(null);
+  const approvalChainRef = useRef<Promise<void>>(Promise.resolve());
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
 
   const [history, setHistory] = useState<string[]>([]);
@@ -479,6 +522,56 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
       setMessages((prev) => [...prev, { id, role, content }]);
     },
     []
+  );
+
+  // The single approval gate (COW-2463). Every sensitive local action funnels
+  // through here: policy is decided by the pure `decide()` — this only enforces
+  // the decision (prompt / allow / refuse) and never re-derives it inline.
+  //  - allow → run, no prompt (a non-read auto-approval still leaves an audit line).
+  //  - ask   → show ApprovalPrompt and block on the user's y/n.
+  //  - deny  → refuse outright (fail closed) with a loud audit line.
+  // Serialized on approvalChainRef so concurrent tool requests queue instead of
+  // clobbering each other's prompt.
+  const requestApproval = useCallback(
+    (
+      permission: PermissionClass,
+      details: { title: string; summary: string; approveLabel?: string; denyLabel?: string }
+    ): Promise<boolean> => {
+      const run = async (): Promise<boolean> => {
+        const decision = decide(permission, permissionMode);
+        if (decision === "allow") {
+          // Reads are frequent and expected — stay quiet. Any other class being
+          // auto-approved is a security-relevant event, so leave a trail.
+          if (permission !== "read") {
+            addMessage("system", `Auto-approved a ${permission} action (${permissionMode} mode).`);
+          }
+          return true;
+        }
+        if (decision === "deny") {
+          addMessage("error", `Refused a ${permission} action: not permitted by the current policy.`);
+          return false;
+        }
+        const approved = await new Promise<boolean>((resolve) => {
+          approvalRef.current = resolve;
+          setPendingApproval({
+            title: details.title,
+            summary: details.summary,
+            approveLabel: details.approveLabel ?? "allow",
+            denyLabel: details.denyLabel ?? "deny",
+          });
+        });
+        setPendingApproval(null);
+        approvalRef.current = null;
+        return approved;
+      };
+      const result = approvalChainRef.current.then(run, run);
+      approvalChainRef.current = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+    [permissionMode, addMessage]
   );
 
   // Show warning if .cowboy directory not found
@@ -1013,10 +1106,27 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             streamed += token;
             setStreamingText((prev) => prev + token);
           },
-          writeActor: (actor) => {
-            const fullPath = join(process.cwd(), actor.filePath);
+          writeActor: async (actor) => {
+            // The backend controls the path — resolve it symlink-safe and refuse
+            // anything escaping the project before we even prompt (CWE-59).
+            let fullPath: string;
+            try {
+              fullPath = resolveSafeWritePath(actor.filePath);
+            } catch (err) {
+              addMessage("error", err instanceof Error ? err.message : String(err));
+              return false;
+            }
+            // Writing the generated actor is a `write`-class action (COW-2463):
+            // ask before it lands, since both the path and the code come from
+            // the backend. Default mode always prompts.
+            const approved = await requestApproval("write", {
+              title: `Write ${actor.filePath}?`,
+              summary: `The agent wants to write the generated actor to ${actor.filePath} (${actor.code.length} bytes).`,
+            });
+            if (!approved) return false;
             mkdirSync(dirname(fullPath), { recursive: true });
             writeFileSync(fullPath, actor.code + "\n", "utf-8");
+            return true;
           },
           abort: handle.abort,
           // ask_user (PR #177): park until the user types the next line, then
@@ -1060,13 +1170,16 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               }
             };
 
-            // Block on explicit approval before touching the key.
-            const approved = await new Promise<boolean>((resolve) => {
-              signatureApprovalRef.current = resolve;
-              setPendingSignature(req.summary);
+            // Block on explicit approval before touching the key. Signing is
+            // class "sign", which `decide` forces to always-ask in every mode —
+            // it can never be auto-approved. Show the exact hash to be signed
+            // (client-derived) alongside the backend's human summary.
+            const approved = await requestApproval("sign", {
+              title: "Signature required",
+              summary: `${req.summary}\n\nHash to sign: ${req.hashHex}`,
+              approveLabel: "sign",
+              denyLabel: "cancel",
             });
-            setPendingSignature(null);
-            signatureApprovalRef.current = null;
             if (!approved) {
               await cancelBroker();
               return "cancelled";
@@ -1124,6 +1237,45 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               }
               return "continue";
             }
+
+            // Permission gate (COW-2463). An unregistered/unclassified tool has
+            // no permission class → fail closed: tell the agent it's unsupported
+            // and never run it. Otherwise route through the approval gate.
+            const permission = toolRegistry.permissionOf(req.toolName);
+            if (permission === undefined) {
+              try {
+                await postToolResult(dashboardUrl, {
+                  sessionId,
+                  toolUseId: req.toolUseId,
+                  status: "error",
+                  output: { message: `unsupported local tool: ${req.toolName}` },
+                });
+              } catch (err) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+              return "continue";
+            }
+
+            const approved = await requestApproval(permission, {
+              title: `Allow ${req.toolName}?`,
+              summary: req.summary ?? `The agent wants to run ${req.toolName}.`,
+            });
+            if (!approved) {
+              // User denial (or a fail-closed refusal) → post a cancelled result
+              // so the backend loop unblocks, and stop the turn.
+              try {
+                await postToolResult(dashboardUrl, {
+                  sessionId,
+                  toolUseId: req.toolUseId,
+                  status: "cancelled",
+                  reason: "user_cancelled",
+                });
+              } catch (err) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+              return "stop";
+            }
+
             const toolResult = await toolRegistry.dispatch(req);
             try {
               await postToolResult(dashboardUrl, {
@@ -1182,7 +1334,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setStreamingText("");
       }
     },
-    [session, addMessage]
+    [session, addMessage, requestApproval]
   );
 
   const handlePromptSubmit = useCallback(
@@ -1265,23 +1417,41 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           ],
         }));
 
-        // Extract and write actor files
+        // Extract and write actor files. Same write gate as the agent path
+        // (COW-2463): ask before each file lands on disk.
         const actors = extractActors(fullResponse);
-        if (actors.length > 0) {
-          for (const actor of actors) {
-            const fullPath = join(process.cwd(), actor.filePath);
-            const dir = dirname(fullPath);
-            mkdirSync(dir, { recursive: true });
-            writeFileSync(fullPath, actor.code + "\n", "utf-8");
-            addMessage(
-              "system",
-              `Wrote ${actor.className ?? "actor"} to ${actor.filePath}`
-            );
+        const writtenPaths: string[] = [];
+        for (const actor of actors) {
+          // Symlink-safe resolution before prompting (CWE-59) — same guard as
+          // the agent path.
+          let fullPath: string;
+          try {
+            fullPath = resolveSafeWritePath(actor.filePath);
+          } catch (err) {
+            addMessage("error", err instanceof Error ? err.message : String(err));
+            continue;
           }
-
+          const approved = await requestApproval("write", {
+            title: `Write ${actor.filePath}?`,
+            summary: `Write the generated actor to ${actor.filePath} (${actor.code.length} bytes).`,
+          });
+          if (!approved) {
+            addMessage("system", `Skipped ${actor.filePath} (not approved).`);
+            continue;
+          }
+          mkdirSync(dirname(fullPath), { recursive: true });
+          writeFileSync(fullPath, actor.code + "\n", "utf-8");
           addMessage(
             "system",
-            `Deploy with: /actor deploy ${actors[0].filePath}`
+            `Wrote ${actor.className ?? "actor"} to ${actor.filePath}`
+          );
+          writtenPaths.push(actor.filePath);
+        }
+
+        if (writtenPaths.length > 0) {
+          addMessage(
+            "system",
+            `Deploy with: /actor deploy ${writtenPaths[0]}`
           );
         }
       } catch (err: unknown) {
@@ -1294,7 +1464,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         setStreamingText("");
       }
     },
-    [session, addMessage, runAgentPrompt]
+    [session, addMessage, runAgentPrompt, requestApproval]
   );
 
   const handleSubmit = useCallback(
@@ -1386,6 +1556,20 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           await executeCommand(result.command, result.args, result.stdin);
           break;
 
+        case "permissions":
+          if (result.mode === null) {
+            addMessage("output", describePermissionMode(permissionMode));
+          } else {
+            setPermissionMode(result.mode);
+            addMessage(
+              "system",
+              result.mode === "auto"
+                ? "Permission mode set to auto (session-only). It governs the agent's actions; anything needing your wallet signature still always asks."
+                : "Permission mode set to default."
+            );
+          }
+          break;
+
         case "prompt":
           if (!projectReady) {
             addMessage("error", "No project initialized. Run /init first.");
@@ -1395,7 +1579,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           break;
       }
     },
-    [isExecuting, exit, addMessage, executeCommand, handlePromptSubmit, projectReady]
+    [isExecuting, exit, addMessage, executeCommand, handlePromptSubmit, projectReady, permissionMode]
   );
 
   const handleHistoryUp = useCallback(() => {
@@ -1520,11 +1704,14 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           onCancel={handleWizardCancel}
           onMessage={addMessage}
         />
-      ) : pendingSignature !== null ? (
-        <SignatureApproval
-          summary={pendingSignature}
-          onApprove={() => signatureApprovalRef.current?.(true)}
-          onDeny={() => signatureApprovalRef.current?.(false)}
+      ) : pendingApproval !== null ? (
+        <ApprovalPrompt
+          title={pendingApproval.title}
+          summary={pendingApproval.summary}
+          approveLabel={pendingApproval.approveLabel}
+          denyLabel={pendingApproval.denyLabel}
+          onApprove={() => approvalRef.current?.(true)}
+          onDeny={() => approvalRef.current?.(false)}
         />
       ) : (
         <InputArea
@@ -1547,6 +1734,7 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         runnerPreferences={session.runnerPreferences}
         runnerUrl={session.runnerUrl}
         dashboardUrl={session.dashboardUrl}
+        permissionMode={permissionMode}
       />
     </Box>
   );

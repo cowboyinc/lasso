@@ -21,6 +21,7 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/docs", description: "Browse bundled Cowboy reference docs" },
   { command: "/faucet", description: "Request devnet CBY from the faucet" },
   { command: "/init", description: "Initialize a project on mesa (default) or a local node" },
+  { command: "/permissions", description: "View or set the approval mode (default|auto)" },
   { command: "/walkthrough", description: "Guided tour of how Cowboy works" },
   { command: "/job results", description: "Get raw job results" },
   { command: "/job runners", description: "Show runners observed for a job" },
@@ -255,6 +256,23 @@ export function parseCommand(input: string): CommandResult {
     case "docs": {
       const topic = parts.slice(1).join(" ").toLowerCase() || null;
       return { type: "docs", topic };
+    }
+
+    case "permission":
+    case "permissions": {
+      const sub = parts[1]?.toLowerCase();
+      if (!sub || sub === "show") {
+        return { type: "permissions", mode: null };
+      }
+      // Accept both `/permissions set auto` and the shorthand `/permissions auto`.
+      const target = sub === "set" ? parts[2]?.toLowerCase() : sub;
+      if (target === "default" || target === "auto") {
+        return { type: "permissions", mode: target };
+      }
+      return {
+        type: "error",
+        text: "Usage: /permissions [show | set <default|auto>]",
+      };
     }
 
     case "transfer": {
@@ -741,6 +759,7 @@ function handleHelp(): CommandResult {
     "    /walkthrough [n]                        Guided tour of how Cowboy works",
     "    /docs [topic]                           Browse bundled Cowboy reference docs",
     "    /faucet [address]                       Request devnet CBY (defaults to your wallet)",
+    "    /permissions [show|set <default|auto>]  View or change the approval mode",
     "    /transfer --to <addr> --amount <cby>   Transfer CBY to an address",
     "    /help                                   Show this help",
     "    /clear                                  Clear the console",
