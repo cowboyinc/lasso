@@ -157,6 +157,103 @@ test("adapter: pending-signature with no hash → null (caller uses legacy notic
   assert.equal(requestFromPendingSignature(ev), null);
 });
 
+// ── COW-2457: per-call timeout + cancellation ───────────────────────────────
+
+/** A tool that never settles on its own — only an abort ends it. Resolves its
+ *  `started` gate so a test knows the run began. */
+function hangingTool(name: string, onAbort?: () => void): LocalTool {
+  return {
+    name,
+    permission: "read",
+    validate: () => {},
+    run: (_args, signal) =>
+      new Promise<ClientToolResult>((resolve) => {
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            onAbort?.();
+            // A signal-aware tool settles itself on abort; dispatch reports it
+            // cancelled regardless, but this keeps the promise from leaking.
+            resolve({ status: "cancelled", reason: "user_cancelled" });
+          });
+        }
+      }),
+  };
+}
+
+test("dispatch: a tool that overruns the timeout → cancelled/timeout", async () => {
+  const reg = new ToolRegistry();
+  reg.register(hangingTool("slow"));
+  const res = await reg.dispatch(
+    { toolUseId: "t1", toolName: "slow", args: {} },
+    { timeoutMs: 20 }
+  );
+  assert.equal(res.status, "cancelled");
+  if (res.status === "cancelled") assert.equal(res.reason, "timeout");
+});
+
+test("dispatch: an external abort → cancelled/user_cancelled, and the tool sees the signal", async () => {
+  const reg = new ToolRegistry();
+  let sawAbort = false;
+  reg.register(hangingTool("waits", () => { sawAbort = true; }));
+  const controller = new AbortController();
+  const p = reg.dispatch(
+    { toolUseId: "t1", toolName: "waits", args: {} },
+    { timeoutMs: 0, signal: controller.signal }
+  );
+  controller.abort();
+  const res = await p;
+  assert.equal(res.status, "cancelled");
+  if (res.status === "cancelled") assert.equal(res.reason, "user_cancelled");
+  assert.equal(sawAbort, true, "the tool's run must receive the abort signal");
+});
+
+test("dispatch: an already-aborted signal short-circuits WITHOUT invoking the tool", async () => {
+  const reg = new ToolRegistry();
+  let ran = false;
+  reg.register({
+    name: "sideeffect",
+    permission: "read",
+    validate: () => {},
+    run: async () => {
+      ran = true; // a side-effecting tool must never fire on a pre-aborted call
+      return { status: "ok", output: null };
+    },
+  });
+  const res = await reg.dispatch(
+    { toolUseId: "t1", toolName: "sideeffect", args: {} },
+    { signal: AbortSignal.abort() }
+  );
+  assert.equal(res.status, "cancelled");
+  if (res.status === "cancelled") assert.equal(res.reason, "user_cancelled");
+  assert.equal(ran, false, "the tool must not run when the signal is already aborted");
+});
+
+test("dispatch: a SYNCHRONOUS throw in run is still caught as tool_failed (never escapes)", async () => {
+  const reg = new ToolRegistry();
+  reg.register({
+    name: "syncthrow",
+    permission: "read",
+    validate: () => {},
+    // Throws before returning a promise.
+    run: (() => {
+      throw new Error("sync boom");
+    }) as LocalTool["run"],
+  });
+  const res = await reg.dispatch({ toolUseId: "t1", toolName: "syncthrow", args: {} });
+  assert.equal(res.status, "error");
+  if (res.status === "error") assert.equal(res.errorCode, "tool_failed");
+});
+
+test("dispatch: a fast tool completes normally before the timeout fires", async () => {
+  const reg = new ToolRegistry();
+  reg.register(okTool("quick", { done: true }));
+  const res = await reg.dispatch(
+    { toolUseId: "t1", toolName: "quick", args: {} },
+    { timeoutMs: 1000 }
+  );
+  assert.deepEqual(res, { status: "ok", output: { done: true } });
+});
+
 test("adapter: generic client_tool_request passes fields through", () => {
   const req = requestFromClientToolEvent({
     toolUseId: "tu2",

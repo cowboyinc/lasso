@@ -499,6 +499,9 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const answerResolverRef = useRef<((answer: string) => void) | null>(null);
   const pendingQuestionRef = useRef<{ choices: string[] } | null>(null);
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
+  // Aborts a local tool that's mid-run (COW-2457): Ctrl-C cancels the in-flight
+  // dispatch (killing any CLI child), distinct from aborting the HTTP stream.
+  const clientToolAbortRef = useRef<AbortController | null>(null);
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
@@ -1199,11 +1202,17 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               return "cancelled";
             }
 
-            const outcome = await toolRegistry.dispatch({
-              toolUseId: req.toolUseId,
-              toolName: SIGN_TOOL_NAME,
-              args: { hashHex: req.hashHex },
-            });
+            const signController = new AbortController();
+            clientToolAbortRef.current = signController;
+            const outcome = await toolRegistry.dispatch(
+              {
+                toolUseId: req.toolUseId,
+                toolName: SIGN_TOOL_NAME,
+                args: { hashHex: req.hashHex },
+              },
+              { signal: signController.signal }
+            );
+            clientToolAbortRef.current = null;
             if (outcome.status === "ok") {
               try {
                 await postSignCallback(dashboardUrl, {
@@ -1217,13 +1226,19 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
                 return { error: err instanceof Error ? err.message : String(err) };
               }
             }
+            // A mid-sign cancel (Ctrl-C / timeout, COW-2457) is graceful, not a
+            // failure: cancel the broker and stop the turn cleanly, like the
+            // pre-sign denial path — don't surface an "AI builder failed" error.
+            if (outcome.status === "cancelled") {
+              await cancelBroker();
+              return "cancelled";
+            }
             // Validation/signer failure: best-effort cancel so the backend loop
             // unblocks instead of waiting out the signature timeout.
             await cancelBroker();
-            const message =
-              outcome.status === "error"
-                ? String((outcome.output as { message?: unknown })?.message ?? "signing failed")
-                : "signing cancelled";
+            const message = String(
+              (outcome.output as { message?: unknown })?.message ?? "signing failed"
+            );
             return { error: message };
           },
           // Generic client-tool bridge (COW-2455). Dispatch the named local tool
@@ -1290,7 +1305,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
               return "stop";
             }
 
-            const toolResult = await toolRegistry.dispatch(req);
+            const toolController = new AbortController();
+            clientToolAbortRef.current = toolController;
+            const toolResult = await toolRegistry.dispatch(req, {
+              signal: toolController.signal,
+            });
+            clientToolAbortRef.current = null;
             try {
               await postToolResult(dashboardUrl, {
                 sessionId,
@@ -1304,7 +1324,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
             } catch (err) {
               return { error: err instanceof Error ? err.message : String(err) };
             }
-            return toolResult.status === "cancelled" ? "stop" : "continue";
+            // A user cancel (Ctrl-C) halts the turn; a timeout posts a structured
+            // result the backend can act on, so the loop continues (COW-2457).
+            return toolResult.status === "cancelled" &&
+              toolResult.reason === "user_cancelled"
+              ? "stop"
+              : "continue";
           },
         });
 
@@ -1648,6 +1673,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   const handleInterrupt = useCallback(() => {
     if (isExecuting) {
+      // Cancel an in-flight local tool first (COW-2457) — kills its CLI child
+      // and yields a `cancelled` result — then tear down the stream.
+      if (clientToolAbortRef.current) {
+        clientToolAbortRef.current.abort();
+        clientToolAbortRef.current = null;
+      }
       if (agentAbortRef.current) {
         agentAbortRef.current();
         addMessage("system", "Interrupted.");

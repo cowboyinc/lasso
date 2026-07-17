@@ -57,7 +57,25 @@ export interface LocalTool {
   permission: PermissionClass;
   /** Throw (any Error) if `args` is malformed. */
   validate: (args: unknown) => void;
-  run: (args: unknown) => Promise<ClientToolResult>;
+  /** Execute an already-validated request. `signal` aborts a long-running tool
+   *  (timeout or user Ctrl-C, COW-2457) — a tool that shells out should kill its
+   *  child on abort; one that ignores it is still reported cancelled, it just
+   *  keeps running in the background until it settles. */
+  run: (args: unknown, signal?: AbortSignal) => Promise<ClientToolResult>;
+}
+
+/** Default per-call ceiling for a local tool (COW-2457). A tool that hasn't
+ *  produced a result in this long is reported back as `cancelled` (timeout) so
+ *  the backend loop unblocks instead of hanging on a wedged local process. */
+export const DEFAULT_TOOL_TIMEOUT_MS = 60_000;
+
+/** Controls for a single dispatch (COW-2457). */
+export interface DispatchOptions {
+  /** Per-call timeout in ms; `0` disables it. Defaults to DEFAULT_TOOL_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** External abort (e.g. the user pressed Ctrl-C). Aborting yields a
+   *  `cancelled` result with reason `user_cancelled`. */
+  signal?: AbortSignal;
 }
 
 /** Registry of local tools + dispatch. The set of registered names is also the
@@ -89,10 +107,11 @@ export class ToolRegistry {
     return [...this.tools.keys()].sort();
   }
 
-  /** Validate + run a request. Never throws: an unknown tool or malformed args
-   *  becomes a structured `error` result so the loop gets an actionable answer
-   *  instead of the stream dying. */
-  async dispatch(req: ClientToolRequest): Promise<ClientToolResult> {
+  /** Validate + run a request. Never throws: an unknown tool, malformed args, a
+   *  timeout, or a user cancel all become a structured result so the loop gets
+   *  an actionable answer instead of the stream dying. A per-call timeout and an
+   *  external abort signal bound how long a local tool can run (COW-2457). */
+  async dispatch(req: ClientToolRequest, opts: DispatchOptions = {}): Promise<ClientToolResult> {
     const tool = this.tools.get(req.toolName);
     if (!tool) {
       return {
@@ -110,14 +129,76 @@ export class ToolRegistry {
         output: { message: err instanceof Error ? err.message : String(err) },
       };
     }
+
+    // Bound the run: a timeout OR an external abort trips the same controller;
+    // the reason distinguishes them so the backend can tell a wedged tool from
+    // a deliberate user cancel.
+    const controller = new AbortController();
+    let reason: ClientToolCancelReason | null = null;
+
+    const outer = opts.signal;
+    const onOuterAbort = () => {
+      reason = "user_cancelled";
+      controller.abort();
+    };
+    if (outer) {
+      if (outer.aborted) onOuterAbort();
+      else outer.addEventListener("abort", onOuterAbort, { once: true });
+    }
+
+    // A pre-aborted dispatch must NOT invoke the tool at all — a side-effecting
+    // tool could spawn/sign/write before it ever observed the signal.
+    if (controller.signal.aborted) {
+      if (outer) outer.removeEventListener("abort", onOuterAbort);
+      return { status: "cancelled", reason: reason ?? "user_cancelled" };
+    }
+
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            reason = reason ?? "timeout";
+            controller.abort();
+          }, timeoutMs)
+        : null;
+
+    const aborted = new Promise<{ kind: "aborted" }>((resolve) => {
+      if (controller.signal.aborted) resolve({ kind: "aborted" });
+      else controller.signal.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true });
+    });
+    // Invoke `run` synchronously (so it observes the live signal at the same
+    // tick), but inside try/catch so a SYNCHRONOUS throw becomes the same
+    // rejected-promise path instead of escaping the guard.
+    let settled: Promise<{ kind: "settled"; result: ClientToolResult } | { kind: "threw"; err: unknown }>;
     try {
-      return await tool.run(req.args);
+      settled = tool
+        .run(req.args, controller.signal)
+        .then((result) => ({ kind: "settled", result }) as const)
+        .catch((err) => ({ kind: "threw", err }) as const);
     } catch (err) {
-      return {
-        status: "error",
-        errorCode: "tool_failed",
-        output: { message: err instanceof Error ? err.message : String(err) },
-      };
+      settled = Promise.resolve({ kind: "threw", err } as const);
+    }
+
+    try {
+      const outcome = await Promise.race([settled, aborted]);
+      if (outcome.kind === "aborted") {
+        return { status: "cancelled", reason: reason ?? "user_cancelled" };
+      }
+      if (outcome.kind === "threw") {
+        // A tool that threw *because* it was aborted is a cancel, not a failure.
+        if (controller.signal.aborted) {
+          return { status: "cancelled", reason: reason ?? "user_cancelled" };
+        }
+        return {
+          status: "error",
+          errorCode: "tool_failed",
+          output: { message: outcome.err instanceof Error ? outcome.err.message : String(outcome.err) },
+        };
+      }
+      return outcome.result;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (outer) outer.removeEventListener("abort", onOuterAbort);
     }
   }
 }
@@ -189,7 +270,7 @@ export interface SignHashArgs {
  *  production, a fake in tests) so this stays pure. Validates the hash shape
  *  before signing — `args` is untrusted. */
 export function makeSignTool(
-  signHash: (hashHex: string) => Promise<EcdsaSignature>
+  signHash: (hashHex: string, signal?: AbortSignal) => Promise<EcdsaSignature>
 ): LocalTool {
   return {
     name: SIGN_TOOL_NAME,
@@ -200,9 +281,9 @@ export function makeSignTool(
         throw new Error("signHash: args.hashHex must be a 0x-prefixed 32-byte hex string");
       }
     },
-    run: async (args: unknown): Promise<ClientToolResult> => {
+    run: async (args: unknown, signal?: AbortSignal): Promise<ClientToolResult> => {
       const { hashHex } = args as SignHashArgs;
-      const signature = await signHash(hashHex);
+      const signature = await signHash(hashHex, signal);
       return { status: "ok", output: signature };
     },
   };
