@@ -268,3 +268,31 @@ test("/docs lists topics or selects one", () => {
   assert.deepEqual(parseCommand("/docs"), { type: "docs", topic: null });
   assert.deepEqual(parseCommand("/docs gas"), { type: "docs", topic: "gas" });
 });
+
+test("/permissions shows the mode with no args or `show`", () => {
+  assert.deepEqual(parseCommand("/permissions"), { type: "permissions", mode: null });
+  assert.deepEqual(parseCommand("/permissions show"), { type: "permissions", mode: null });
+  // Singular alias.
+  assert.deepEqual(parseCommand("/permission"), { type: "permissions", mode: null });
+});
+
+test("/permissions sets a mode via `set <mode>` or the bare shorthand", () => {
+  assert.deepEqual(parseCommand("/permissions set auto"), { type: "permissions", mode: "auto" });
+  assert.deepEqual(parseCommand("/permissions set default"), { type: "permissions", mode: "default" });
+  assert.deepEqual(parseCommand("/permissions auto"), { type: "permissions", mode: "auto" });
+  assert.deepEqual(parseCommand("/permissions default"), { type: "permissions", mode: "default" });
+});
+
+test("/permissions rejects an unknown mode", () => {
+  const bad = parseCommand("/permissions set yolo");
+  assert.equal(bad.type, "error");
+  assert.match(bad.text, /default\|auto/);
+  const bare = parseCommand("/permissions bananas");
+  assert.equal(bare.type, "error");
+});
+
+test("/permissions appears in slash suggestions", () => {
+  assert.ok(
+    getSlashCommandSuggestions("/perm").some((item) => item.command === "/permissions")
+  );
+});

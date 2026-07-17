@@ -18,6 +18,7 @@
 
 import type { ToolPendingSignatureEvent } from "./agent-client.js";
 import type { EcdsaSignature } from "./signer.js";
+import type { PermissionClass } from "./permissions.js";
 
 /** A request from the backend to run a local tool, normalized from the wire. */
 export interface ClientToolRequest {
@@ -50,6 +51,10 @@ export type ClientToolResult =
  *  `invalid_args` result without the tool implementing that plumbing. */
 export interface LocalTool {
   name: string;
+  /** What this tool does — gates it through the permission policy (COW-2463).
+   *  Required: an unclassified tool cannot be registered, and dispatch fails
+   *  closed on any tool whose class is missing. */
+  permission: PermissionClass;
   /** Throw (any Error) if `args` is malformed. */
   validate: (args: unknown) => void;
   run: (args: unknown) => Promise<ClientToolResult>;
@@ -71,6 +76,12 @@ export class ToolRegistry {
 
   has(name: string): boolean {
     return this.tools.has(name);
+  }
+
+  /** The permission class of a registered tool, or undefined if unknown. An
+   *  undefined result MUST be treated as deny by the caller (fail closed). */
+  permissionOf(name: string): PermissionClass | undefined {
+    return this.tools.get(name)?.permission;
   }
 
   /** Names to advertise to the backend (COW-2456), sorted for determinism. */
@@ -182,6 +193,7 @@ export function makeSignTool(
 ): LocalTool {
   return {
     name: SIGN_TOOL_NAME,
+    permission: "sign",
     validate: (args: unknown) => {
       const hashHex = (args as Partial<SignHashArgs> | null)?.hashHex;
       if (typeof hashHex !== "string" || !HASH_HEX_RE.test(hashHex)) {
