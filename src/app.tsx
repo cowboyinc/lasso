@@ -688,22 +688,59 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
       addMessage("system", `Working from the project root: ${process.cwd()}`);
     }
     if (!projectReady) {
+      // First-run onboarding (COW-2472): no project here or above — guide setup.
       addMessage(
         "system",
-        "No .cowboy/ project found here or in any parent directory. Run /init to get started on mesa (the public devnet), or /init local for a local node."
+        [
+          "Welcome to lasso — the Cowboy developer console.",
+          "",
+          `No project found here or above. A .cowboy/ project will be created in:`,
+          `  ${process.cwd()}`,
+          "",
+          "  /init          set up on mesa (the public devnet) + a funded wallet",
+          "  /init local    set up against a local node",
+          "",
+          "New to Cowboy? Try /walkthrough for a quick tour, or /help for every command.",
+        ].join("\n")
       );
       return;
     }
+    // Project onboarding: say where we're connected so it's clear at a glance.
+    let backend: string;
+    if (initialConfig.dashboardUrl) {
+      let origin = initialConfig.dashboardUrl;
+      try {
+        origin = new URL(initialConfig.dashboardUrl).origin; // show only the origin
+      } catch {
+        /* unparseable configured URL — show it as-is rather than crash startup */
+      }
+      backend = `agent backend ${origin}`;
+    } else if (initialConfig.runnerUrl) {
+      backend = "direct runner mode";
+    } else {
+      backend = "no AI backend (set dashboard_url in .cowboy/config.json)";
+    }
     addMessage(
       "system",
-      "Slash commands start with /. Plain text starts the AI actor builder."
+      [
+        `Project ready — network ${initialConfig.validatorUrl}, ${backend}.`,
+        "Slash commands start with /. Plain text starts the AI actor builder; /help for commands.",
+      ].join("\n")
     );
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Detect cowboy CLI version on mount
+  // Detect the cowboy CLI on mount; if it's missing, onboard the install.
   useEffect(() => {
-    getCowboyVersion().then(setCowboyVersion);
-  }, []);
+    getCowboyVersion().then((v) => {
+      setCowboyVersion(v);
+      if (v === null) {
+        addMessage(
+          "system",
+          "The cowboy CLI wasn't detected — actor deploy/execute and wallet commands need it. Install: brew install cowboyinc/lasso/cowboy"
+        );
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Best-effort update notice (LASSO_NO_UPDATE_CHECK=1 to disable)
   useEffect(() => {
