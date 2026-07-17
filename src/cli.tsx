@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { App } from "./app.js";
 import { loadProjectConfig, DEFAULT_DASHBOARD_URL } from "./config.js";
+import { findProjectRoot } from "./project.js";
 import { VERSION } from "./constants.js";
 import type { ProjectConfig } from "./types.js";
 
@@ -21,8 +22,9 @@ Running lasso with no arguments starts the console. Inside it:
   /init           create a project on mesa (the public devnet)
   /help           every command
 
-Lasso connects to mesa by default and stores project config in
-.cowboy/config.json under the working directory.`;
+Lasso connects to mesa by default. It works from the nearest project
+(an ancestor .cowboy/ directory), or the current directory if there's
+none — run /init to create one.`;
 
 const DEFAULT_CONFIG: ProjectConfig = {
   validatorUrl: "https://rpc.mesa.cowboylabs.net",
@@ -53,6 +55,16 @@ function main() {
     return;
   }
 
+  // Resolve the project workspace by walking up for `.cowboy/` (COW-2459), then
+  // work from there — so config, the sandbox, and the local FS tools are all
+  // rooted at the project even when lasso is launched from a subdirectory.
+  const launchDir = process.cwd();
+  const { root: projectRoot, found } = findProjectRoot(launchDir);
+  if (found && projectRoot !== launchDir) {
+    process.chdir(projectRoot);
+  }
+  const movedIntoProject = found && projectRoot !== launchDir;
+
   const config = loadProjectConfig();
   const hasProject = config !== null && existsSync(join(process.cwd(), ".cowboy"));
 
@@ -66,6 +78,7 @@ function main() {
     <App
       initialConfig={config ?? DEFAULT_CONFIG}
       hasProject={hasProject}
+      movedIntoProject={movedIntoProject}
     />,
     { exitOnCtrlC: false }
   );
