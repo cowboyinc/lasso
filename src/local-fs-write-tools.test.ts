@@ -57,6 +57,31 @@ test("applyEdit: overlapping fallback matches don't corrupt (non-overlapping onl
   }
 });
 
+test("applyEdit: fallback size-check uses the matched span (a shrink near the cap is allowed)", () => {
+  // A whitespace-padded line matched by a short old_string, replaced by a longer
+  // literal but still SHRINKING vs the matched span → must not be rejected.
+  const content = "before\n          x\nafter"; // padded "x" line
+  const r = applyEdit(content, "x", "yy", false, content.length + 1);
+  assert.equal(r.ok, true, "matched span is longer than old_string; net change shrinks");
+  if (r.ok) assert.match(r.result, /yy/);
+});
+
+test("applyEdit: refuses a change whose result would blow the size cap (no giant alloc)", () => {
+  const r = applyEdit("a".repeat(1000), "a", "X".repeat(10), true, 2000);
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.error, /exceed/);
+});
+
+test("applyEdit: refuses an old_string too broad for a line-dense file (bounded scan)", () => {
+  // Padded lines so the EXACT path misses (spaces) and only the whitespace
+  // fallback would scan the 200k × 100 positions.
+  const content = Array.from({ length: 200000 }, () => "  a  ").join("\n");
+  const old = Array.from({ length: 100 }, () => "a").join("\n");
+  const r = applyEdit(content, old, "x", false);
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.error, /too broad/);
+});
+
 test("applyEdit: not found reports both strategies", () => {
   const r = applyEdit("hello", "zzz", "q", false);
   assert.equal(r.ok, false);

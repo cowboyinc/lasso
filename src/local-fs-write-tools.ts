@@ -45,6 +45,8 @@ const MAX_WRITE_BYTES = 5 * 1024 * 1024;
 const MAX_PATCH_FILE_BYTES = 5 * 1024 * 1024;
 /** Max size of the old/new snippets in a patch. */
 const MAX_SNIPPET_BYTES = 256 * 1024;
+/** Cap on the whitespace-fallback scan (file-lines × old_string-lines). */
+const MAX_FALLBACK_SCAN_OPS = 10_000_000;
 const SNIFF_BYTES = 8 * 1024;
 
 function err(code: string, message: string): ClientToolResult {
@@ -123,18 +125,27 @@ export function applyEdit(
   content: string,
   oldStr: string,
   newStr: string,
-  replaceAll: boolean
+  replaceAll: boolean,
+  maxResultBytes: number = MAX_WRITE_BYTES
 ): EditResult {
   if (!oldStr) return { ok: false, error: "old_string is empty" };
   if (oldStr === newStr) return { ok: false, error: "old_string and new_string are identical" };
 
+  // Refuse a change whose ESTIMATED result would blow the cap BEFORE building it
+  // — otherwise `replace_all` with a large new_string over many matches can
+  // allocate gigabytes just to be rejected afterward.
+  const tooBig = (matchCount: number): boolean =>
+    content.length + matchCount * Math.max(0, newStr.length - oldStr.length) > maxResultBytes;
+
   // 1. Exact substring match.
   const exact = content.split(oldStr).length - 1;
   if (exact === 1 || (exact > 1 && replaceAll)) {
+    const count = replaceAll ? exact : 1;
+    if (tooBig(count)) return { ok: false, error: `patched file would exceed ${maxResultBytes} bytes` };
     return {
       ok: true,
       result: replaceAll ? content.split(oldStr).join(newStr) : content.replace(oldStr, newStr),
-      count: replaceAll ? exact : 1,
+      count,
     };
   }
   if (exact > 1 && !replaceAll) {
@@ -144,6 +155,12 @@ export function applyEdit(
   // 2. Whitespace-insensitive line-block match (exact === 0).
   const cl = content.split("\n");
   const ol = oldStr.replace(/\n$/, "").split("\n");
+  // Bound the O(file-lines × old-lines) scan so a huge line-dense file plus a
+  // multi-line old_string can't freeze the caller (the preview runs this BEFORE
+  // the user can approve/deny).
+  if (cl.length * ol.length > MAX_FALLBACK_SCAN_OPS) {
+    return { ok: false, error: "old_string is too broad for this file — add more surrounding context" };
+  }
   const trim = (s: string) => s.trim();
   const starts: number[] = [];
   for (let i = 0; i + ol.length <= cl.length; i++) {
@@ -175,6 +192,17 @@ export function applyEdit(
   }
   const nl = newStr.split("\n");
   const targets = replaceAll ? nonOverlap : [nonOverlap[0]];
+  // Size-guard against the ACTUAL matched spans, not oldStr.length — the matched
+  // lines may be whitespace-padded (longer than oldStr), so a shrink near the
+  // cap must not be rejected. Estimate the net delta from the real spans.
+  let delta = 0;
+  for (const st of targets) {
+    const matchedLen = cl.slice(st, st + ol.length).join("\n").length;
+    delta += newStr.length - matchedLen;
+  }
+  if (content.length + delta > maxResultBytes) {
+    return { ok: false, error: `patched file would exceed ${maxResultBytes} bytes` };
+  }
   const out = cl.slice();
   // Splice from the last match backwards so earlier indices stay valid.
   for (const m of targets.slice().reverse()) {
