@@ -59,15 +59,57 @@ test("validate: rejects non-hex or oversized payload and out-of-range limits", (
 test("buildSimulateArgv: fixed --flag value shape, defaults applied, no positionals", () => {
   const argv = buildSimulateArgv("/tmp/actor.py", { actorPath: "x", handler: "get" });
   assert.equal(argv[0], "dev");
-  assert.ok(argv.includes("--actor") && argv.includes("/tmp/actor.py"));
+  assert.ok(argv.includes("--code") && argv.includes("/tmp/actor.py"));
   assert.ok(argv.includes("--handler") && argv.includes("get"));
-  assert.ok(argv.includes("--cycles-limit") && argv.includes("--cells-limit"));
-  assert.ok(argv.includes("--json"));
+  assert.ok(argv.includes("--cycles-limit"));
+  assert.ok(argv.includes("--strict"));
+  // Flags the shipped CLI does not have must never be emitted.
+  assert.ok(!argv.includes("--actor") && !argv.includes("--cells-limit") && !argv.includes("--json"));
   // handler is validated elsewhere; it only ever appears as a --handler value.
   assert.equal(argv.indexOf("get"), argv.indexOf("--handler") + 1);
 });
 
-// ── parsing (assumed cowboy dev JSON contract) ───────────────────────────────
+// ── parsing (confirmed cowboy dev / dev-runner JSON contract) ────────────────
+
+test("parse: a real dev-runner success line maps ok/gas_used/state/events", () => {
+  const line = JSON.stringify({
+    ok: true,
+    output: "0x01",
+    events: [{ topic: "incremented", data: "0x02" }],
+    messages: [],
+    state: { "0xaa": "0xbb" },
+    gas_used: 4321,
+  });
+  const r = parseSimulateOutput(line, 0);
+  assert.equal(r.status, "ok");
+  assert.equal(r.cyclesUsed, 4321);
+  assert.deepEqual(r.stateChanges, { "0xaa": "0xbb" });
+  assert.deepEqual(r.events, [{ topic: "incremented", data: "0x02" }]);
+  assert.equal(r.advisory, true);
+});
+
+test("parse: a real dev-runner success with empty state omits stateChanges", () => {
+  const r = parseSimulateOutput(
+    '{"ok":true,"output":"0x","events":[],"messages":[],"state":{},"gas_used":7}',
+    0
+  );
+  assert.equal(r.status, "ok");
+  assert.equal(r.stateChanges, undefined);
+});
+
+test("parse: a real dev-runner error line surfaces error_code + error (exit 1)", () => {
+  const line = JSON.stringify({
+    ok: false,
+    error_code: "CYCLES_EXHAUSTED",
+    error: "out of cycles",
+    events: [],
+    messages: [],
+    state: {},
+  });
+  const r = parseSimulateOutput(line, 1);
+  assert.equal(r.status, "error");
+  assert.match(r.error ?? "", /CYCLES_EXHAUSTED: out of cycles/);
+});
 
 test("parse: an ok JSON result maps fields and is advisory/local", () => {
   const r = parseSimulateOutput('{"status":"ok","cycles_used":1200,"cells_used":8}', 0);
