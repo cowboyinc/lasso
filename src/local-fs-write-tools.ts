@@ -73,7 +73,7 @@ function refuseUnsafeTarget(resolved: string, path: string): ClientToolResult | 
  *  instead of a truncated file. When overwriting, the existing file's mode is
  *  carried over (a `0600` secret or an executable script keeps its bits rather
  *  than reverting to the process default). */
-function atomicWrite(target: string, content: string): void {
+export function atomicWrite(target: string, content: string): void {
   let existingMode: number | undefined;
   try {
     existingMode = statSync(target).mode;

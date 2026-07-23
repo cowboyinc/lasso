@@ -54,6 +54,17 @@ import {
 } from "./simulate.js";
 import { makeReadFileTool, makeListTool, makeSearchTool } from "./local-fs-tools.js";
 import { makeWriteFileTool, makePatchFileTool, applyEdit } from "./local-fs-write-tools.js";
+import { makeFilesClient } from "./files-client.js";
+import {
+  applyPullPlan,
+  buildPullPlan,
+  defaultVolumeName,
+  formatPullResult,
+  formatPullSummary,
+  formatPushResult,
+  loadSyncState,
+  runSyncPush,
+} from "./sync.js";
 import { diffLines } from "./diff.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
 import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
@@ -633,13 +644,19 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
          *  path-aware `decideWrite` so an out-of-project / protected target is
          *  never auto-approved and a traversal is denied. */
         scope?: WriteScope;
+        /** Prompt even when policy would auto-approve (batch plans whose
+         *  review is the safety property). Deny still wins. */
+        alwaysAsk?: boolean;
       }
     ): Promise<boolean> => {
       const run = async (): Promise<boolean> => {
-        const decision =
+        let decision =
           permission === "write" && details.scope
             ? decideWrite(details.scope, permissionMode)
             : decide(permission, permissionMode);
+        // A batch operation (e.g. a sync-pull plan) must show its plan even in
+        // `auto` — the review IS the safety property. Deny still wins.
+        if (details.alwaysAsk && decision === "allow") decision = "ask";
         if (decision === "allow") {
           // Reads are frequent and expected — stay quiet. Any other class being
           // auto-approved is a security-relevant event, so leave a trail.
@@ -914,6 +931,72 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
           }
         } catch (err: unknown) {
           addMessage("error", sanitize(`Simulate failed: ${err instanceof Error ? err.message : String(err)}`));
+        } finally {
+          clientToolAbortRef.current = null;
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      // sync push/pull — local project ↔ CBFS volume (COW-2467). A command the
+      // user typed is their own intent, so PUSH runs without a gate (it only
+      // reads non-protected project files). PULL overwrites local files with
+      // untrusted remote content, so it funnels through the write approval
+      // gate with the full plan listed; the sandbox refusals inside
+      // buildPullPlan are not overridable from the prompt.
+      if (command === "sync-push" || command === "sync-pull") {
+        if (!session.dashboardUrl || !session.walletAddress) {
+          addMessage(
+            "error",
+            "Sync needs a project with a wallet and an agent backend (dashboard_url). Run /init first."
+          );
+          return;
+        }
+        setIsExecuting(true);
+        const controller = new AbortController();
+        clientToolAbortRef.current = controller;
+        try {
+          const root = process.cwd();
+          const volume =
+            args[0] ?? loadSyncState(root).volume ?? defaultVolumeName(root);
+          const client = makeFilesClient({
+            dashboardUrl: session.dashboardUrl,
+            walletAddress: session.walletAddress,
+          });
+          if (command === "sync-push") {
+            const result = await runSyncPush(client, root, volume, {
+              onProgress: (line) => addMessage("system", line),
+              signal: controller.signal,
+            });
+            addMessage("output", formatPushResult(result));
+          } else {
+            const plan = await buildPullPlan(client, root, volume, {
+              onProgress: (line) => addMessage("system", line),
+              signal: controller.signal,
+            });
+            if (plan.writes.length === 0) {
+              addMessage("output", formatPullResult(applyPullPlan(root, plan)));
+              return;
+            }
+            const approved = await requestApproval("write", {
+              title: "Sync pull",
+              summary: formatPullSummary(plan),
+              scope: "inside", // every plan entry was individually classified inside
+              alwaysAsk: true, // the plan review must happen even in auto mode
+              approveLabel: "write the listed files",
+              denyLabel: "skip",
+            });
+            if (!approved) {
+              addMessage("system", "sync pull skipped (not approved); no files written.");
+              return;
+            }
+            addMessage("output", formatPullResult(applyPullPlan(root, plan)));
+          }
+        } catch (err: unknown) {
+          addMessage(
+            "error",
+            sanitize(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
+          );
         } finally {
           clientToolAbortRef.current = null;
           setIsExecuting(false);

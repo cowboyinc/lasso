@@ -231,7 +231,7 @@ export function globMatch(glob: string, path: string): boolean {
   return ti === toks.length;
 }
 
-interface WalkEntry {
+export interface WalkEntry {
   rel: string;
   type: "file" | "dir" | "symlink";
   size: number;
@@ -276,7 +276,7 @@ function readDirBounded(absDir: string): { names: string[]; capped: boolean } {
  *  yields a protected entry. Depth-first, lexicographic, caps enforced by the
  *  caller via the return value of `visit`; a single directory is itself capped
  *  at MAX_DIR_ENTRIES so the walk can't be wedged by one giant folder. */
-function walkProject(
+export function walkProject(
   root: string,
   startRel: string,
   maxDepth: number,

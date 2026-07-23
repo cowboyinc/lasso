@@ -107,9 +107,12 @@ test("validateVolumeName: accepts CIP-9 names, rejects hostile ones", () => {
   }
 });
 
-test("validateRemotePath: rejects traversal, absolute, flag-like and nul paths", () => {
+test("validateRemotePath: rejects traversal, absolute, flag-like and control-char paths", () => {
   assert.doesNotThrow(() => validateRemotePath("actors/counter/main.py"));
-  for (const bad of ["", "/abs", "-flag", "a/../b", "a//b", "a/./b", "a\0b", ".."]) {
+  assert.doesNotThrow(() => validateRemotePath("My File.txt"));
+  // Control chars included: a newline in a remote path could inject fake
+  // lines into the pull approval plan.
+  for (const bad of ["", "/abs", "-flag", "a/../b", "a//b", "a/./b", "a\0b", "..", "a\nb", "a\tb", "a\x1b[31mb", " padded.txt", "padded.txt "]) {
     assert.throws(() => validateRemotePath(bad), new RegExp("invalid remote path"));
   }
 });
@@ -204,6 +207,26 @@ test("uploadFiles: enforces the batch count and raw-size caps client-side", asyn
   ];
   await assert.rejects(client.uploadFiles("proj", big), /raw bytes/);
   assert.equal(calls.length, 0); // rejected before any network call
+});
+
+test("readObject: an empty 200 body is an error, never content:'' (no silent blanking)", async () => {
+  const fetchFn = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      },
+      text: async () => "",
+    }) as unknown as Response) as unknown as typeof fetch;
+  const client = makeFilesClient({
+    dashboardUrl: "https://dash.example",
+    walletAddress: "0xabcd000000000000000000000000000000000001",
+    fetchFn,
+    now: () => 0,
+    signHash: async () => SIG,
+  });
+  await assert.rejects(client.readObject("proj", "a.py"), /empty\/malformed body/);
 });
 
 test("uploadFiles: an empty batch is a no-op (no request, no signing)", async () => {

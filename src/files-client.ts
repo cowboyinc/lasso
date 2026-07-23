@@ -73,16 +73,20 @@ export function validateVolumeName(name: string): void {
   }
 }
 
-/** Reject remote paths the backend would refuse (and anything argv/URL-hostile). */
+/** Reject remote paths the backend would refuse (and anything argv/URL-hostile).
+ *  Control characters are rejected outright: a newline inside a remote path
+ *  would let untrusted remote input inject fake lines into the pull approval
+ *  plan the user reviews before local writes. */
 export function validateRemotePath(path: string): void {
   const bad =
     path.length === 0 ||
+    path !== path.trim() || // the backend trims before validating — a padded path would silently land elsewhere
     path.startsWith("-") ||
     path.startsWith("/") ||
-    path.includes("\0") ||
+    /[\u0000-\u001f\u007f]/.test(path) ||
     path.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
   if (bad) {
-    throw new Error(`sync: invalid remote path "${path}"`);
+    throw new Error(`sync: invalid remote path ${JSON.stringify(path.slice(0, 120))}`);
   }
 }
 
@@ -199,7 +203,8 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
     method: "GET" | "POST",
     path: string,
     body: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: { voidBody?: boolean } = {}
   ): Promise<unknown> => {
     let retriedAuth = false;
     for (;;) {
@@ -215,7 +220,20 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
         signal,
       });
       if (resp.ok) {
-        return resp.json();
+        if (options.voidBody) {
+          // Void endpoints (upload, createVolume) may legitimately answer with
+          // an empty body (204) — the backend already acted, that's success.
+          return resp.json().catch(() => ({}));
+        }
+        // Read endpoints MUST carry a body: mapping a missing one to defaults
+        // would let an empty 200 read as `content: ""` and overwrite a local
+        // file with nothing on pull.
+        return resp.json().catch(() => {
+          throw new FilesApiError(
+            `sync: backend returned an empty/malformed body for ${method} ${path}`,
+            resp.status
+          );
+        });
       }
       const detail = (await resp.text().catch(() => "")).slice(0, 200);
       if (resp.status === 401 && !retriedAuth) {
@@ -274,8 +292,13 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
         undefined,
         signal
       )) as { content?: unknown; truncated?: unknown };
+      if (typeof data.content !== "string") {
+        // Fail closed: defaulting a malformed body to "" would let a pull
+        // overwrite a local file with nothing.
+        throw new FilesApiError(`sync: malformed object body for ${JSON.stringify(path)}`, 200);
+      }
       return {
-        content: typeof data.content === "string" ? data.content : "",
+        content: data.content,
         truncated: Boolean(data.truncated),
       };
     },
@@ -312,7 +335,8 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
             ...(f.contentType ? { contentType: f.contentType } : {}),
           })),
         },
-        signal
+        signal,
+        { voidBody: true }
       );
     },
 
@@ -322,7 +346,9 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
       signal?: AbortSignal
     ): Promise<void> {
       validateVolumeName(volumeName);
-      await request("POST", "/volumes", { name: volumeName, visibility }, signal);
+      await request("POST", "/volumes", { name: volumeName, visibility }, signal, {
+        voidBody: true,
+      });
     },
   };
 }
