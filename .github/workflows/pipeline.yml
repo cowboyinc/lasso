@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+  # No base filter: stacked PRs (base = another feature branch) must run the
+  # same typecheck/tests as PRs against main — with a `branches: [main]`
+  # filter, an entire stack merges with zero CI signal until the final PR.
+  # Binary build/upload stays push-to-main only (see the `build` job's `if`).
   pull_request:
-    branches:
-      - main
 
 permissions:
   contents: read
