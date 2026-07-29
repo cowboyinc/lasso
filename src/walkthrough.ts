@@ -56,18 +56,17 @@ method is a handler you can call from the outside.
     @actor
     class Counter:
         def init(self, payload):
-            runtime.charge_gas(500)
             self.storage['count'] = 0
             return b'ok'
 
         def increment(self, payload):
-            runtime.charge_gas(200)
             self.storage['count'] = self.storage.get('count', 0) + 1
             return str(self.storage['count']).encode()
 
-Handlers take payload (bytes) and return bytes. Gas is charged
-explicitly. The PVM is deterministic: no clock, no randomness, no
-network - use block height for time, runners for the outside world.`,
+Handlers take payload (bytes) and return bytes. Gas (cycles and
+cells) is metered by the PVM as code runs. It is deterministic:
+no clock, no randomness, no network - use block height for time,
+runners for the outside world.`,
   },
   {
     title: "Storage: the one rule",
@@ -106,8 +105,8 @@ Every transaction carries limits for both. Lasso defaults:
   /actor execute ...   500k cycles / 500k cells
   /actor deploy  ...   10M  cycles / 10M  cells
 
-In actor code you charge explicitly: runtime.charge_gas(200) for a
-simple handler, more for heavy work. Blowing a limit aborts the tx.`,
+The PVM meters both as your code runs - no explicit charging in
+actor code. Blowing a limit aborts the tx.`,
   },
   {
     title: "Messages, mailboxes, timers",
@@ -140,7 +139,6 @@ results back, optionally verified across multiple runners.
     class Oracle:
         @runner.continuation
         async def ask(self, payload):
-            runtime.charge_gas(2000)
             ctx = capture()                  # save locals across await
             result = await runner.llm('Summarize: ...', max_tokens=256)
             self.storage['answer'] = str(result)

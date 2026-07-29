@@ -76,7 +76,7 @@ In lasso: /faucet funds the session wallet, /faucet <address> funds any address.
     keywords: ["actor", "actors", "smart", "contract", "python", "class", "handler", "deploy", "init", "pvm", "code", "decorator"],
     body: `Actors are Cowboy's smart contracts: Python classes running in the deterministic PVM. Each actor has an address, a CBOR key-value storage, a mailbox, and a CBY balance.
 
-Structure: a class with the @actor decorator. init(self, payload) runs at deploy; every other method is a handler invoked via "actor execute". Handlers receive payload (bytes) and return bytes. Gas must be charged explicitly with runtime.charge_gas(n).
+Structure: a class with the @actor decorator. init(self, payload) runs at deploy; every other method is a handler invoked via "actor execute". Handlers receive payload (bytes) and return bytes. Gas (cycles/cells) is metered automatically by the PVM as code runs.
 
 Deploy computes the actor address from (code, creator, salt), so the same code+salt redeploys to the same address.
 
@@ -111,7 +111,7 @@ Storage writes are metered in Cells (the data half of dual-metered gas), so stru
 
 Each is priced separately (own basefee), so compute-heavy and data-heavy workloads don't bid against each other. Transactions carry cycles-limit and cells-limit; lasso defaults to 500k/500k for execute and 10M/10M for deploy.
 
-In actor code, charge gas explicitly: runtime.charge_gas(amount) (or pvm_host.charge_gas). Typical values used in examples: 100-500 for simple handlers, 2000+ for handlers that launch runner jobs. Exceeding a limit aborts the transaction.`,
+The PVM meters both axes automatically as actor code runs - handlers do not charge gas explicitly. Exceeding a limit aborts the transaction.`,
   },
   {
     id: "messages",

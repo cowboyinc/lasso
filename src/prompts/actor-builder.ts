@@ -48,7 +48,6 @@ class MyActor:
     def init(self, payload):           # Called on deploy
         self.storage['key'] = value    # CBOR auto-encode/decode
         val = self.storage.get('key', default)
-        runtime.charge_gas(500)        # Explicit gas charge
         runtime.emit_event('topic', {'data': ...})
         ctx = runtime.context()        # {sender, actor_addr, block_height, tx_hash}
         return b'ok'
@@ -60,7 +59,6 @@ class MyActor:
 
     @runner.continuation               # For async LLM/HTTP calls
     async def ask_llm(self, payload):
-        runtime.charge_gas(2000)
         ctx = capture()                # Save locals across await
         ctx.my_var = 'saved'
         result = await runner.llm(
@@ -75,7 +73,6 @@ class MyActor:
 
 ## Runtime API
 \`\`\`
-runtime.charge_gas(amount)                    # Deduct cycles (required)
 runtime.emit_event(name, payload)             # Emit on-chain event
 runtime.context()                             # Get execution context dict
 runtime.get_sender() -> bytes                 # 20-byte sender address
@@ -118,7 +115,6 @@ runtime.token_burn(token_id, amount)              # Owner only
 \`\`\`python
 import pvm_host
 def init(payload):                               # Called on deploy
-    pvm_host.charge_gas(500)
     pvm_host.set_state(b'key', b'value')         # Raw bytes state
     val = pvm_host.get_state(b'key')             # Returns bytes or None
     pvm_host.emit_event('topic', b'data')
@@ -134,19 +130,16 @@ from cowboy_sdk import actor, runtime
 @actor
 class CounterActor:
     def init(self, payload):
-        runtime.charge_gas(500)
         self.storage['count'] = 0
         self.storage['owner'] = runtime.get_sender().hex()
         return b'ok'
 
     def increment(self, payload):
-        runtime.charge_gas(200)
         self.storage['count'] = self.storage.get('count', 0) + 1
         runtime.emit_event('counter.inc', {'count': self.storage['count']})
         return str(self.storage['count']).encode()
 
     def get_count(self, payload):
-        runtime.charge_gas(100)
         return str(self.storage.get('count', 0)).encode()
 \`\`\`
 
@@ -158,14 +151,12 @@ import json
 @actor
 class AssistantActor:
     def init(self, payload):
-        runtime.charge_gas(500)
         self.storage['owner'] = runtime.get_sender().hex()
         self.storage['query_count'] = 0
         return b'ok'
 
     @runner.continuation
     async def ask(self, payload):
-        runtime.charge_gas(2000)
         data = json.loads(payload) if payload else {}
         question = data.get('question', 'Hello')
         qid = self.storage.get('query_count', 0)
@@ -179,7 +170,6 @@ class AssistantActor:
         return b'ok'
 
     def get_answer(self, payload):
-        runtime.charge_gas(100)
         return (self.storage.get('latest', '') or '').encode()
 \`\`\`
 
@@ -187,7 +177,6 @@ class AssistantActor:
 - Only help with Cowboy topics: actors, SDK, deployment, blockchain concepts
 - Actors must be Python. Never provide other languages
 - Refuse harmful actors (infinite loops, resource abuse, exploits)
-- Always charge gas explicitly with runtime.charge_gas() or pvm_host.charge_gas()
 - All handlers receive payload (bytes) and return bytes
 - Use self.storage for state (auto CBOR) or pvm_host.get/set_state for raw bytes
 - Prefer @actor class style over legacy bare functions
