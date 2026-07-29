@@ -33,6 +33,8 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/runner primary", description: "Set the primary runner preference" },
   { command: "/runner register", description: "Register this wallet as a runner" },
   { command: "/simulate", description: "Run an actor handler locally against the PVM (advisory)" },
+  { command: "/sync push", description: "Upload project files to the wallet's CBFS volume" },
+  { command: "/sync pull", description: "Download the CBFS volume into the local project" },
   { command: "/token approve", description: "Approve a token spender" },
   { command: "/token balance", description: "Check a token balance" },
   { command: "/token burn", description: "Burn tokens" },
@@ -266,6 +268,18 @@ export function parseCommand(input: string): CommandResult {
       const args = [file, handler];
       if (payload) args.push(payload);
       return { type: "execute", command: "simulate", args };
+    }
+
+    case "sync": {
+      const sub = parts[1];
+      const volume = parts[2];
+      if (sub !== "push" && sub !== "pull") {
+        return { type: "error", text: "Usage: /sync push|pull [volume]" };
+      }
+      if (volume !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(volume)) {
+        return { type: "error", text: `Invalid volume name: ${volume}. Usage: /sync push|pull [volume]` };
+      }
+      return { type: "execute", command: `sync-${sub}`, args: volume ? [volume] : [] };
     }
 
     case "walkthrough": {
@@ -806,6 +820,10 @@ function handleHelp(): CommandResult {
     "    /actor list                             List deployed actors",
     "    /actor logs <address>                   View actor logs",
     "    /simulate <file> <handler> [payload]    Run a handler locally against the PVM (advisory)",
+    "",
+    "  Sync:",
+    "    /sync push [volume]                     Upload project files to the wallet's CBFS volume",
+    "    /sync pull [volume]                     Download the CBFS volume into the local project",
     "",
     "  Runner:",
     "    /runner list                            List active runners and local routing hints",
