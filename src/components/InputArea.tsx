@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import { Separator } from "./Separator.js";
 import { LineEditor } from "./LineEditor.js";
 import type { EditorBuffer } from "../types.js";
@@ -15,6 +15,20 @@ interface InputAreaProps {
   onHistoryDown?: () => void;
   onActivity?: () => void;
   isDisabled?: boolean;
+}
+
+/**
+ * Keeps Ctrl-C reachable while a command / agent turn / local tool is running
+ * (COW-2457): the LineEditor — the usual useInput consumer — is unmounted while
+ * input is disabled, so without this the interrupt path (stream abort, local
+ * tool cancellation) could never actually fire mid-run. The app runs with
+ * exitOnCtrlC disabled, so nothing else handles the keypress.
+ */
+function ExecutingNotice({ onInterrupt }: { onInterrupt?: () => void }) {
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") onInterrupt?.();
+  });
+  return <Text dimColor>Executing... (Ctrl+C to cancel)</Text>;
 }
 
 export function InputArea({
@@ -73,7 +87,7 @@ export function InputArea({
       <Separator />
       <Box paddingX={1}>
         {isDisabled ? (
-          <Text dimColor>Executing...</Text>
+          <ExecutingNotice onInterrupt={onInterrupt} />
         ) : (
           <Box>
             <Text color="green">{"\u276F "}</Text>
