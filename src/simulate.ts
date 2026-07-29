@@ -135,25 +135,32 @@ export function redactAbsolutePaths(
 
 // ── ADAPTER: the only place the `cowboy dev` contract is assumed ─────────────
 
-/** Build the argv for a local simulate. ASSUMED CONTRACT (COW-2461): mirrors the
- *  `actor execute` flags. Confirm against the shipped `cowboy dev` and adjust
- *  here only. Positional user values never appear — everything is `--flag value`
- *  with a hard-validated `handler`, so there is no argv-injection surface. */
+/** Build the argv for a local simulate. CONFIRMED CONTRACT (`cowboy dev`, node
+ *  CLI): `--code <file> --handler <name> [--payload <hex>] [--cycles-limit <n>]
+ *  [--strict]`. There is no `--cells-limit` (cells aren't metered by the local
+ *  simulator; a requested `cellsLimit` is accepted but not enforced locally) and
+ *  no `--json` (the dev-runner always emits a single JSON result line).
+ *  `--strict` enforces the chain's determinism rules, keeping the advisory
+ *  result as close to on-chain behavior as the local PVM allows. Positional
+ *  user values never appear — everything is `--flag value` with a
+ *  hard-validated `handler`, so there is no argv-injection surface. */
 export function buildSimulateArgv(sourceFile: string, args: SimulateArgs): string[] {
-  const argv = ["dev", "--actor", sourceFile, "--handler", args.handler];
+  const argv = ["dev", "--code", sourceFile, "--handler", args.handler];
   if (args.payload !== undefined) argv.push("--payload", args.payload);
   argv.push("--cycles-limit", String(args.cyclesLimit ?? 500_000));
-  argv.push("--cells-limit", String(args.cellsLimit ?? 500_000));
-  argv.push("--json");
+  argv.push("--strict");
   return argv;
 }
 
-/** Parse `cowboy dev` stdout into a stable SimulateResult. ASSUMED CONTRACT:
- *  a JSON object as the FINAL non-empty line of output. Only that line is
- *  authoritative — anything the simulated actor prints happens mid-run, before
- *  the CLI emits its result, so an actor `print('{"status":"ok"}')` cannot
- *  spoof a pass (an earlier `{...}` line is never consulted). Falls back to a
- *  plain error result. Pure. */
+/** Parse `cowboy dev` stdout into a stable SimulateResult. CONFIRMED CONTRACT
+ *  (dev-runner): a single JSON object line on stdout — success is
+ *  `{ok:true, output, events, messages, state, gas_used}`, failure is
+ *  `{ok:false, error_code, error, ...}` with a non-zero exit. We take the FINAL
+ *  non-empty line as authoritative — anything the simulated actor prints
+ *  happens mid-run, before the CLI emits its result, so an actor
+ *  `print('{"ok":true}')` cannot spoof a pass (an earlier `{...}` line is never
+ *  consulted). Legacy `status`/`cycles_used`-style keys are still recognized.
+ *  Falls back to a plain error result. Pure. */
 export function parseSimulateOutput(stdout: string, exitCode: number): SimulateResult {
   const base = { advisory: true, simulator: "local" } as const;
   const lines = stdout
@@ -184,8 +191,11 @@ export function parseSimulateOutput(stdout: string, exitCode: number): SimulateR
 
   const num = (v: unknown): number | undefined =>
     typeof v === "number" && Number.isFinite(v) ? v : undefined;
-  const errorText =
-    typeof parsed.error === "string" ? parsed.error : undefined;
+  // Prefix the dev-runner's machine code (e.g. CYCLES_EXHAUSTED) so the
+  // advisory error is self-explanatory without the raw CLI output.
+  const errorCode = typeof parsed.error_code === "string" ? parsed.error_code : undefined;
+  let errorText = typeof parsed.error === "string" ? parsed.error : undefined;
+  if (errorText && errorCode) errorText = `${errorCode}: ${errorText}`;
 
   const hasStatus = typeof parsed.status === "string";
   const hasOk = typeof parsed.ok === "boolean";
@@ -194,6 +204,7 @@ export function parseSimulateOutput(stdout: string, exitCode: number): SimulateR
     "cyclesUsed",
     "cells_used",
     "cellsUsed",
+    "gas_used",
     "state_changes",
     "stateChanges",
     "events",
@@ -222,12 +233,18 @@ export function parseSimulateOutput(stdout: string, exitCode: number): SimulateR
   // printed before the process failed (e.g. the output cap killed it mid-run).
   if (exitCode !== 0) ok = false;
 
+  // `state` is the dev-runner's post-run storage map; an empty object means no
+  // changes — don't surface it as a (noise) result field.
+  const state =
+    parsed.state && typeof parsed.state === "object" && Object.keys(parsed.state).length > 0
+      ? parsed.state
+      : undefined;
   return {
     ...base,
     status: ok ? "ok" : "error",
-    cyclesUsed: num(parsed.cycles_used ?? parsed.cyclesUsed),
+    cyclesUsed: num(parsed.cycles_used ?? parsed.cyclesUsed ?? parsed.gas_used),
     cellsUsed: num(parsed.cells_used ?? parsed.cellsUsed),
-    stateChanges: parsed.state_changes ?? parsed.stateChanges,
+    stateChanges: parsed.state_changes ?? parsed.stateChanges ?? state,
     events: parsed.events,
     logs: typeof parsed.logs === "string" ? parsed.logs : undefined,
     error: errorText,
