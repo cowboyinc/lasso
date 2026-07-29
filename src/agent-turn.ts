@@ -41,10 +41,13 @@ export interface AgentTurnIO {
   onSystem: (text: string) => void;
   /** Append streaming text (assistant prose and write_actor drafts). */
   onToken: (token: string) => void;
-  /** Persist a generated actor to disk. Sync by contract; if it throws
-   *  (fs error), the exception propagates out of runAgentTurn to the
-   *  caller's catch. */
-  writeActor: (actor: ExtractedActor) => void;
+  /** Persist a generated actor to disk, AFTER the caller's approval gate
+   *  (COW-2463) — writing is a `write`-class action, so the user must approve
+   *  it (default mode always asks). Resolves `true` if written, `false` if the
+   *  user declined or policy refused. Async so the write can await the
+   *  interactive prompt; if it throws (fs error), the exception propagates out
+   *  of runAgentTurn to the caller's catch. */
+  writeActor: (actor: ExtractedActor) => Promise<boolean>;
   /** Abort the underlying HTTP stream. */
   abort: () => void;
   /** The agent called `ask_user` and is BLOCKING (PR #177). Collect the user's
@@ -219,11 +222,18 @@ export async function runAgentTurn(
             out.code.trim()
           ) {
             const actor = actorFromCode(out.code);
-            io.writeActor(actor);
-            wrote.push(actor);
-            // The "Deploy with: /actor deploy <path>" hint is emitted once
-            // per turn by the caller (app.tsx) from result.wrote — not here.
-            io.onSystem(`Wrote ${actor.className ?? "actor"} to ${actor.filePath}`);
+            // Gate the write behind the caller's approval (COW-2463). The path
+            // and code are backend-controlled, so a write must never land on
+            // disk unattended.
+            const written = await io.writeActor(actor);
+            if (written) {
+              wrote.push(actor);
+              // The "Deploy with: /actor deploy <path>" hint is emitted once
+              // per turn by the caller (app.tsx) from result.wrote — not here.
+              io.onSystem(`Wrote ${actor.className ?? "actor"} to ${actor.filePath}`);
+            } else {
+              io.onSystem(`✗ write skipped: ${actor.filePath} (not approved)`);
+            }
           } else {
             io.onSystem(`✗ write_actor: ${out.notes || ev.summary || "failed"}`);
           }

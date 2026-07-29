@@ -16,7 +16,7 @@ const FAKE_SIG: EcdsaSignature = { r: "0x1", s: "0x2", v: 27 };
 const VALID_HASH = "0x" + "ab".repeat(32); // 64 hex chars
 
 function okTool(name: string, output: unknown): LocalTool {
-  return { name, validate: () => {}, run: async () => ({ status: "ok", output }) };
+  return { name, permission: "read", validate: () => {}, run: async () => ({ status: "ok", output }) };
 }
 
 test("dispatch: registered tool round-trips its result", async () => {
@@ -38,6 +38,7 @@ test("dispatch: invalid args → invalid_args error (validate runs before run)",
   let ran = false;
   reg.register({
     name: "strict",
+    permission: "read",
     validate: () => {
       throw new Error("bad args");
     },
@@ -56,6 +57,7 @@ test("dispatch: a throwing tool → tool_failed error", async () => {
   const reg = new ToolRegistry();
   reg.register({
     name: "boom",
+    permission: "read",
     validate: () => {},
     run: async () => {
       throw new Error("kaboom");
@@ -69,7 +71,7 @@ test("dispatch: a throwing tool → tool_failed error", async () => {
 test("dispatch: a tool may return a distinct cancelled result (not collapsed to error)", async () => {
   const reg = new ToolRegistry();
   const cancelled: ClientToolResult = { status: "cancelled", reason: "user_cancelled" };
-  reg.register({ name: "gated", validate: () => {}, run: async () => cancelled });
+  reg.register({ name: "gated", permission: "read", validate: () => {}, run: async () => cancelled });
   const res = await reg.dispatch({ toolUseId: "t1", toolName: "gated", args: {} });
   assert.deepEqual(res, cancelled);
 });
@@ -85,6 +87,13 @@ test("supportedNames: sorted advertisement for the handshake", () => {
   reg.register(okTool("b", 1));
   reg.register(okTool("a", 1));
   assert.deepEqual(reg.supportedNames(), ["a", "b"]);
+});
+
+test("permissionOf returns the tool's class; undefined for unknown (caller denies)", () => {
+  const reg = new ToolRegistry();
+  reg.register(makeSignTool(async () => FAKE_SIG));
+  assert.equal(reg.permissionOf(SIGN_TOOL_NAME), "sign");
+  assert.equal(reg.permissionOf("nope"), undefined);
 });
 
 test("sign tool: valid hash signs and returns the signature as output", async () => {

@@ -1,3 +1,5 @@
+import type { PermissionMode } from "./permissions.js";
+
 export interface ActorEntry {
   address: string;
   label: string;
@@ -64,4 +66,6 @@ export type CommandResult =
   | { type: "execute"; command: string; args: string[]; stdin?: string }
   | { type: "wizard"; wizard: "token-launch" }
   | { type: "walkthrough"; lesson: number | null }
-  | { type: "docs"; topic: string | null };
+  | { type: "docs"; topic: string | null }
+  // `mode: null` = show the current mode; otherwise set it (COW-2463).
+  | { type: "permissions"; mode: PermissionMode | null };
