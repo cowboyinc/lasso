@@ -66,15 +66,16 @@ test("decideWrite: an in-project target follows the class policy (auto=allow, de
   assert.equal(decideWrite("inside", "default"), "ask");
 });
 
-test("decideWrite: outside/protected targets never auto-approve — always ask", () => {
+test("decideWrite: a protected target always asks; an outside target is denied", () => {
   for (const mode of MODES) {
-    assert.equal(decideWrite("outside", mode), "ask", `outside/${mode}`);
     assert.equal(decideWrite("protected", mode), "ask", `protected/${mode}`);
+    assert.equal(decideWrite("outside", mode), "deny", `outside/${mode}`);
   }
 });
 
-test("decideWrite: an invalid (traversal / escape) target is denied in every mode", () => {
+test("decideWrite: invalid (traversal / escape) and outside are denied in every mode", () => {
   for (const mode of MODES) {
     assert.equal(decideWrite("invalid", mode), "deny", `invalid/${mode}`);
+    assert.equal(decideWrite("outside", mode), "deny", `outside/${mode}`);
   }
 });
