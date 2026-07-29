@@ -390,6 +390,8 @@ function formatRunnerList(
 interface AppProps {
   initialConfig: ProjectConfig;
   hasProject: boolean;
+  /** True when lasso walked up to a parent project and chdir'd into it. */
+  movedIntoProject?: boolean;
 }
 
 interface IndexedMessage extends ConsoleMessage {
@@ -499,7 +501,7 @@ function commandToCowboyArgs(command: string, args: string[]): string[] {
   }
 }
 
-export function App({ initialConfig, hasProject: initialHasProject }: AppProps) {
+export function App({ initialConfig, hasProject: initialHasProject, movedIntoProject }: AppProps) {
   const { exit } = useApp();
   const [projectReady, setProjectReady] = useState(initialHasProject);
   const [session, setSession] = useState<SessionState>({
@@ -625,10 +627,15 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
 
   // Show warning if .cowboy directory not found
   useEffect(() => {
+    // Note when we walked up to a parent project (COW-2459) so it's clear the
+    // console is operating from the project root, not the launch directory.
+    if (movedIntoProject) {
+      addMessage("system", `Working from the project root: ${process.cwd()}`);
+    }
     if (!projectReady) {
       addMessage(
         "system",
-        "No .cowboy/ project found in current directory. Run /init to get started on mesa (the public devnet), or /init local for a local node."
+        "No .cowboy/ project found here or in any parent directory. Run /init to get started on mesa (the public devnet), or /init local for a local node."
       );
       return;
     }

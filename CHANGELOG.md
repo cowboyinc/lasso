@@ -4,6 +4,7 @@
 
 ### Changed
 - The AI builder no longer emits explicit `charge_gas()` calls in generated actors, and the walkthrough / reference docs no longer instruct them — gas (cycles/cells) is metered automatically by the PVM as code runs.
+- **lasso works from the project root (COW-2459).** On launch, lasso walks up from the current directory to the nearest ancestor holding a `.cowboy/` directory and works from there — so the console, its config, the write sandbox, and the local FS tools are all rooted at the project even when you start lasso in a subdirectory (like `git`). When it moves up into a parent project it says so; if no project is found anywhere above, it stays put and `/init` creates one.
 
 ### Added
 - **Interactive `ask_user` (dashboard PR #177).** When the agent asks a blocking question, the console prints it (with numbered choices), lets you type an answer while the run stays parked (a bare number picks a choice; free text works too), and POSTs it to `/api/agent/answer-callback` so the same run resumes. Replaces the old turn-ending clarify cue.
