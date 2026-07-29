@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, lstatSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { Box, Static, useApp } from "ink";
@@ -55,6 +55,9 @@ import {
 import { makeReadFileTool, makeListTool, makeSearchTool } from "./local-fs-tools.js";
 import { makeWriteFileTool, makePatchFileTool, applyEdit } from "./local-fs-write-tools.js";
 import { makeFilesClient } from "./files-client.js";
+import { makeSecretStore } from "./secret-store.js";
+import { makeGetSecretTool, makeSetSecretTool } from "./secret-tools.js";
+import { SecretPrompt } from "./components/SecretPrompt.js";
 import {
   applyPullPlan,
   buildPullPlan,
@@ -608,6 +611,14 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const approvalRef = useRef<((approved: boolean) => void) | null>(null);
   const approvalChainRef = useRef<Promise<void>>(Promise.resolve());
+  // Masked secret capture (COW-2469): what the SecretPrompt shows; the
+  // resolver gets the typed value or null on cancel. Serialized on the same
+  // chain as approvals so two modal prompts can never race onto the screen.
+  const [pendingSecretPrompt, setPendingSecretPrompt] = useState<{
+    name: string;
+    reason?: string;
+  } | null>(null);
+  const secretPromptRef = useRef<((value: string | null) => void) | null>(null);
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
   // Active wallet's on-chain balance for the status bar (COW-2466). null until
   // first fetched / when unknown.
@@ -658,9 +669,11 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         // `auto` — the review IS the safety property. Deny still wins.
         if (details.alwaysAsk && decision === "allow") decision = "ask";
         if (decision === "allow") {
-          // Reads are frequent and expected — stay quiet. Any other class being
-          // auto-approved is a security-relevant event, so leave a trail.
-          if (permission !== "read") {
+          // Reads are frequent and expected — stay quiet. `secret` is quiet
+          // too: its own masked prompt IS the loud, interactive part. Any
+          // other class being auto-approved is a security-relevant event, so
+          // leave a trail.
+          if (permission !== "read" && permission !== "secret") {
             const scopeTag = permission === "write" && details.scope ? ` [${details.scope}]` : "";
             addMessage("system", `Auto-approved a ${permission} action${scopeTag} (${permissionMode} mode).`);
           }
@@ -695,6 +708,38 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
       return result;
     },
     [permissionMode, addMessage]
+  );
+
+  // Local secret store + masked capture (COW-2469). The store is rooted at
+  // the project; the prompt rides the approval chain so it can't collide with
+  // an ApprovalPrompt. An abort (timeout / Ctrl-C on the turn) cancels the
+  // prompt as a null value.
+  const secretStore = useMemo(() => makeSecretStore({ root: process.cwd() }), []);
+  const promptSecret = useCallback(
+    (name: string, reason: string | undefined, signal?: AbortSignal): Promise<string | null> => {
+      const run = (): Promise<string | null> => {
+        if (signal?.aborted) return Promise.resolve(null);
+        return new Promise<string | null>((resolve) => {
+          const finish = (value: string | null) => {
+            signal?.removeEventListener("abort", onAbort);
+            setPendingSecretPrompt(null);
+            secretPromptRef.current = null;
+            resolve(value);
+          };
+          const onAbort = () => secretPromptRef.current?.(null);
+          signal?.addEventListener("abort", onAbort, { once: true });
+          secretPromptRef.current = finish;
+          setPendingSecretPrompt({ name, reason });
+        });
+      };
+      const result = approvalChainRef.current.then(run, run);
+      approvalChainRef.current = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+    []
   );
 
   // Show warning if .cowboy directory not found
@@ -999,6 +1044,55 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
           );
         } finally {
           clientToolAbortRef.current = null;
+          setIsExecuting(false);
+        }
+        return;
+      }
+
+      // secrets — local secret store (COW-2469). Direct user intent: no gate,
+      // but `set` still captures the value through the masked prompt (never
+      // from the command line, so it can't land in shell/console history).
+      if (command === "secrets-set" || command === "secrets-list" || command === "secrets-delete") {
+        setIsExecuting(true);
+        try {
+          if (command === "secrets-list") {
+            const metas = await secretStore.list();
+            if (metas.length === 0) {
+              addMessage("output", "  No local secrets. Set one with /secrets set <NAME>.");
+            } else {
+              const lines = [
+                `  Local secrets (${secretStore.backend} backend) — values are never shown`,
+                "",
+                ...metas.map(
+                  (m) => `  ${m.name.padEnd(32)} ${new Date(m.updatedAtMs).toISOString()}`
+                ),
+              ];
+              addMessage("output", lines.join("\n"));
+            }
+          } else if (command === "secrets-delete") {
+            const removed = await secretStore.remove(args[0]);
+            addMessage(
+              "output",
+              removed ? `  Secret ${args[0]} removed.` : `  No secret named ${args[0]}.`
+            );
+          } else {
+            const value = await promptSecret(args[0], undefined);
+            if (value === null) {
+              addMessage("system", "secret entry cancelled; nothing stored.");
+            } else {
+              await secretStore.set(args[0], value);
+              addMessage(
+                "output",
+                `  Secret ${args[0]} stored locally (${secretStore.backend}). It never leaves this machine.`
+              );
+            }
+          }
+        } catch (err: unknown) {
+          addMessage(
+            "error",
+            sanitize(`Secrets failed: ${err instanceof Error ? err.message : String(err)}`)
+          );
+        } finally {
           setIsExecuting(false);
         }
         return;
@@ -1394,6 +1488,8 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         // in-project auto-approves only in auto mode).
         toolRegistry.register(makeWriteFileTool());
         toolRegistry.register(makePatchFileTool());
+        toolRegistry.register(makeSetSecretTool(secretStore, promptSecret));
+        toolRegistry.register(makeGetSecretTool(secretStore));
 
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,
@@ -1630,6 +1726,12 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
             clientToolAbortRef.current = toolController;
             const toolResult = await toolRegistry.dispatch(req, {
               signal: toolController.signal,
+              // A secret-class tool blocks on HUMAN input (fetching a key from
+              // a password manager easily beats the 60s tool timeout meant
+              // for wedged subprocesses). 10 minutes; Ctrl-C still cancels.
+              ...(toolRegistry.permissionOf(req.toolName) === "secret"
+                ? { timeoutMs: 10 * 60_000 }
+                : {}),
             });
             clientToolAbortRef.current = null;
             try {
@@ -1845,10 +1947,25 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
       setInput(createEditorState(""));
       setPendingExit(false);
 
-      setHistory((prev) => [...prev, trimmed]);
+      // Any malformed `/secrets …` line may carry secret material inline
+      // (set NAME value, NAME=value, a value pasted after delete/list…) —
+      // redact before anything persists it: the message log and the up-arrow
+      // history must never hold the raw line. Only the exact well-formed
+      // shapes are recorded verbatim; the parser still rejects the attempt
+      // with cleanup instructions.
+      // Case-SENSITIVE on the well-formed side (matching the parser exactly)
+      // and case-INSENSITIVE on the trigger: `/secrets SET x` is redacted even
+      // though `/secrets set x` would record — over-redaction is harmless,
+      // under-redaction leaks.
+      const wellFormedSecrets =
+        /^\/secrets\s+(list|(set|delete)\s+[A-Za-z_][A-Za-z0-9_]{0,63})$/;
+      const inlineSecret = /^\/secrets\b/i.test(trimmed) && !wellFormedSecrets.test(trimmed);
+      const recorded = inlineSecret ? "/secrets ████ (redacted)" : trimmed;
+
+      setHistory((prev) => [...prev, recorded]);
       setHistoryIndex(-1);
 
-      addMessage("command", trimmed);
+      addMessage("command", recorded);
 
       const result = parseCommand(trimmed);
 
@@ -2063,6 +2180,13 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
           onLaunch={handleTokenLaunch}
           onCancel={handleWizardCancel}
           onMessage={addMessage}
+        />
+      ) : pendingSecretPrompt !== null ? (
+        <SecretPrompt
+          name={pendingSecretPrompt.name}
+          reason={pendingSecretPrompt.reason}
+          onSubmit={(value) => secretPromptRef.current?.(value)}
+          onCancel={() => secretPromptRef.current?.(null)}
         />
       ) : pendingApproval !== null ? (
         <ApprovalPrompt

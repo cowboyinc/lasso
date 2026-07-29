@@ -33,6 +33,9 @@ const RAW_SLASH_COMMAND_CATALOG: SlashCommandSuggestion[] = [
   { command: "/runner primary", description: "Set the primary runner preference" },
   { command: "/runner register", description: "Register this wallet as a runner" },
   { command: "/simulate", description: "Run an actor handler locally against the PVM (advisory)" },
+  { command: "/secrets set", description: "Store a secret locally (masked input; never leaves this machine)" },
+  { command: "/secrets list", description: "List local secret names (values are never shown)" },
+  { command: "/secrets delete", description: "Remove a local secret" },
   { command: "/sync push", description: "Upload project files to the wallet's CBFS volume" },
   { command: "/sync pull", description: "Download the CBFS volume into the local project" },
   { command: "/token approve", description: "Approve a token spender" },
@@ -268,6 +271,43 @@ export function parseCommand(input: string): CommandResult {
       const args = [file, handler];
       if (payload) args.push(payload);
       return { type: "execute", command: "simulate", args };
+    }
+
+    case "secrets": {
+      const sub = parts[1];
+      const name = parts[2];
+      if (sub === "list") {
+        if (parts.length > 2) {
+          return {
+            type: "error",
+            text: "Usage: /secrets list (no extra arguments — if you pasted a value, treat it as exposed and rotate it).",
+          };
+        }
+        return { type: "execute", command: "secrets-list", args: [] };
+      }
+      if (sub !== "set" && sub !== "delete") {
+        return { type: "error", text: "Usage: /secrets set|delete <NAME> | /secrets list" };
+      }
+      // A surplus token or NAME=value is almost certainly a secret typed
+      // inline — it is ALREADY visible in the console log above. Never echo
+      // any token back (that would duplicate the leak); tell the user how to
+      // clean up instead.
+      if (parts.length > 3 || (name !== undefined && name.includes("="))) {
+        return {
+          type: "error",
+          text:
+            "Never put the secret VALUE on the command line. The line was redacted from the console log and history, " +
+            "but treat the value as exposed anyway (it was on screen) — rotate it if it was real. " +
+            "Use /secrets set <NAME> and type the value in the masked prompt.",
+        };
+      }
+      if (!name || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) {
+        return {
+          type: "error",
+          text: "Invalid secret name (use [A-Za-z_][A-Za-z0-9_], max 64). The VALUE is asked with a masked prompt — never put it on the command line.",
+        };
+      }
+      return { type: "execute", command: `secrets-${sub}`, args: [name] };
     }
 
     case "sync": {
@@ -824,6 +864,11 @@ function handleHelp(): CommandResult {
     "  Sync:",
     "    /sync push [volume]                     Upload project files to the wallet's CBFS volume",
     "    /sync pull [volume]                     Download the CBFS volume into the local project",
+    "",
+    "  Secrets (stored locally, never leave this machine):",
+    "    /secrets set <NAME>                     Store a secret (masked input)",
+    "    /secrets list                           List secret names (never values)",
+    "    /secrets delete <NAME>                  Remove a secret",
     "",
     "  Runner:",
     "    /runner list                            List active runners and local routing hints",

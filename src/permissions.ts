@@ -22,7 +22,14 @@
  *  safe to auto-run in `auto` mode, but worth a confirmation in `default` (it
  *  still spawns a process and consumes resources), so it rides the same
  *  auto-approval path as `write`. */
-export type PermissionClass = "read" | "write" | "exec" | "deploy" | "sign" | "simulate";
+export type PermissionClass =
+  | "read"
+  | "write"
+  | "exec"
+  | "deploy"
+  | "sign"
+  | "simulate"
+  | "secret";
 
 /** `default`: auto-approve reads, ask for everything else. `auto`: opt-in, may
  *  additionally auto-approve the classes in AUTO_APPROVED_CLASSES (none yet).
@@ -36,7 +43,15 @@ export type PermissionDecision = "allow" | "ask" | "deny";
 
 import type { WriteScope } from "./path-sandbox.js";
 
-const KNOWN_CLASSES: readonly string[] = ["read", "write", "exec", "deploy", "sign", "simulate"];
+const KNOWN_CLASSES: readonly string[] = [
+  "read",
+  "write",
+  "exec",
+  "deploy",
+  "sign",
+  "simulate",
+  "secret",
+];
 
 /**
  * Classes `auto` mode may auto-approve beyond what `default` does.
@@ -75,6 +90,14 @@ export function decide(permission: string, mode: PermissionMode): PermissionDeci
   if (cls === "sign" || cls === "deploy") return "ask";
 
   if (cls === "read") return "allow";
+
+  // `secret` (COW-2469) is interactive BY CONSTRUCTION: a secret-class tool's
+  // only effect is showing the local masked capture prompt, which is itself
+  // the consent step (cancel = the tool is cancelled; the value never appears
+  // in args or results — see secret-tools.ts). Routing it through the y/n
+  // gate would stack a second prompt in front of the first, so the gate
+  // allows and the tool's own prompt does the asking, in every mode.
+  if (cls === "secret") return "allow";
 
   // write / exec
   if (mode === "auto" && AUTO_APPROVED_CLASSES.includes(cls)) return "allow";
