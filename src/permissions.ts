@@ -14,8 +14,15 @@
  */
 
 /** What a local tool does, from least to most dangerous. Required on every
- *  registered tool — an unclassified action is denied. */
-export type PermissionClass = "read" | "write" | "exec" | "deploy" | "sign";
+ *  registered tool — an unclassified action is denied.
+ *
+ *  `simulate` (COW-2461) is cheap, sandboxed local compute: it runs actor code
+ *  in the deterministic no-I/O PVM via the `cowboy` CLI — no chain writes, no
+ *  funds, no filesystem/network side effects. It sits between `read` and `exec`:
+ *  safe to auto-run in `auto` mode, but worth a confirmation in `default` (it
+ *  still spawns a process and consumes resources), so it rides the same
+ *  auto-approval path as `write`. */
+export type PermissionClass = "read" | "write" | "exec" | "deploy" | "sign" | "simulate";
 
 /** `default`: auto-approve reads, ask for everything else. `auto`: opt-in, may
  *  additionally auto-approve the classes in AUTO_APPROVED_CLASSES (none yet).
@@ -29,17 +36,20 @@ export type PermissionDecision = "allow" | "ask" | "deny";
 
 import type { WriteScope } from "./path-sandbox.js";
 
-const KNOWN_CLASSES: readonly string[] = ["read", "write", "exec", "deploy", "sign"];
+const KNOWN_CLASSES: readonly string[] = ["read", "write", "exec", "deploy", "sign", "simulate"];
 
 /**
- * Classes `auto` mode may auto-approve beyond what `default` does. `write` is
- * enabled now that the path sandbox lands (COW-2464) — but ONLY for in-project,
- * non-protected targets: the scope check lives in the gate (`decideWrite`), not
- * here, because a path is not a policy input. `exec` stays out (no exec
- * sandbox), and sign/deploy are irreversible/fund-spending so they are always
- * interactive regardless.
+ * Classes `auto` mode may auto-approve beyond what `default` does.
+ *  - `write` (COW-2464) — but ONLY for in-project, non-protected targets: the
+ *    scope check lives in the gate (`decideWrite`), not here, because a path is
+ *    not a policy input.
+ *  - `simulate` (COW-2461) — sandboxed local PVM compute with no chain/FS/network
+ *    side effects; the tool itself enforces the bounds (timeout, output caps) and
+ *    sandboxes any source path, so it is safe to auto-run.
+ * `exec` stays out (no exec sandbox), and sign/deploy are irreversible /
+ * fund-spending so they are always interactive regardless.
  */
-const AUTO_APPROVED_CLASSES: readonly PermissionClass[] = ["write"];
+const AUTO_APPROVED_CLASSES: readonly PermissionClass[] = ["write", "simulate"];
 
 /**
  * Decide how an action of `permission` class is handled under `mode`.

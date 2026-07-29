@@ -8,7 +8,10 @@ export function executeCowboyAsync(
   args: string[],
   stdin?: string,
   signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  /** Cap combined stdout+stderr; the child is killed once exceeded so a runaway
+   *  local process can't exhaust memory (COW-2461). 0 / undefined = uncapped. */
+  maxOutputBytes?: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new Error("aborted before spawn"));
@@ -35,18 +38,36 @@ export function executeCowboyAsync(
 
     let stdout = "";
     let stderr = "";
+    let capped = false;
+    const cap = maxOutputBytes && maxOutputBytes > 0 ? maxOutputBytes : Infinity;
+    // Count actual bytes, not UTF-16 code units, so non-ASCII output can't
+    // overshoot the cap.
+    const overCap = () =>
+      Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8") > cap;
 
+    // Once the cap trips we kill the child AND stop appending, so a process that
+    // ignores SIGTERM and keeps writing can't grow these strings past the cap.
     child.stdout.on("data", (data: Buffer) => {
+      if (capped) return;
       stdout += data.toString();
+      if (overCap()) {
+        capped = true;
+        child.kill("SIGTERM");
+      }
     });
 
     child.stderr.on("data", (data: Buffer) => {
+      if (capped) return;
       stderr += data.toString();
+      if (overCap()) {
+        capped = true;
+        child.kill("SIGTERM");
+      }
     });
 
     child.on("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
+      resolve({ stdout, stderr, exitCode: code ?? 1, truncated: capped });
     });
 
     child.on("error", (err) => {

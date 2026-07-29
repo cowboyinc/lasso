@@ -45,7 +45,13 @@ import {
 } from "./agent-client.js";
 import { runAgentTurn } from "./agent-turn.js";
 import { signHashLocally, type EcdsaSignature } from "./signer.js";
-import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME } from "./client-tool-bridge.js";
+import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME, DEFAULT_TOOL_TIMEOUT_MS } from "./client-tool-bridge.js";
+import {
+  makeSimulateTool,
+  SIMULATE_TOOL_NAME,
+  type SimulateArgs,
+  type SimulateResult,
+} from "./simulate.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
 import { classifyWritePath, type WriteScope } from "./path-sandbox.js";
 import {
@@ -194,6 +200,25 @@ function formatLocalActorList(actors: ActorEntry[]): string {
     `  ${sep}`,
     ...rows.map((r) => `  ${r}`),
   ].join("\n");
+}
+
+function formatSimulateResult(r: SimulateResult): string {
+  const lines = [
+    `  Local simulation (${r.status === "ok" ? "passed" : "failed"}) — advisory`,
+    "",
+  ];
+  if (r.cyclesUsed != null) lines.push(`  Cycles: ${r.cyclesUsed.toLocaleString("en-US")}`);
+  if (r.cellsUsed != null) lines.push(`  Cells:  ${r.cellsUsed.toLocaleString("en-US")}`);
+  if (r.stateChanges != null) {
+    lines.push("", "  State changes:", `    ${sanitize(JSON.stringify(r.stateChanges)).slice(0, 500)}`);
+  }
+  if (r.events != null) {
+    lines.push("", "  Events:", `    ${sanitize(JSON.stringify(r.events)).slice(0, 500)}`);
+  }
+  if (r.logs) lines.push("", "  Logs:", `    ${sanitize(r.logs).slice(0, 1000)}`);
+  if (r.error) lines.push("", `  Error: ${sanitize(r.error).slice(0, 500)}`);
+  lines.push("", "  Local PVM result — not on-chain truth; deploy + verify to confirm.");
+  return lines.join("\n");
 }
 
 function stringifyResultData(data: unknown): string {
@@ -728,6 +753,47 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         return;
       }
 
+      // simulate — run a handler locally against the PVM (COW-2461). A command
+      // the user typed is their own intent, so it runs without an approval gate
+      // (like any slash command); the sandbox + bounds still apply inside.
+      if (command === "simulate") {
+        setIsExecuting(true);
+        // Route through the same registry dispatch as the bridge so the direct
+        // command inherits its guarantees: hard arg validation, a per-call
+        // timeout, and the abort RACE (returns promptly even if `cowboy dev`
+        // lingers after SIGTERM). Ctrl-C aborts via clientToolAbortRef.
+        const controller = new AbortController();
+        clientToolAbortRef.current = controller;
+        try {
+          const [file, handler, payload] = args;
+          const simArgs: SimulateArgs = {
+            actorPath: file,
+            handler,
+            ...(payload ? { payload } : {}),
+          };
+          const reg = new ToolRegistry();
+          reg.register(makeSimulateTool());
+          const res = await reg.dispatch(
+            { toolUseId: "cli-simulate", toolName: SIMULATE_TOOL_NAME, args: simArgs },
+            { timeoutMs: DEFAULT_TOOL_TIMEOUT_MS, signal: controller.signal }
+          );
+          if (res.status === "ok") {
+            addMessage("output", formatSimulateResult(res.output as SimulateResult));
+          } else if (res.status === "cancelled") {
+            addMessage("error", res.reason === "timeout" ? "Simulate timed out." : "Simulate cancelled.");
+          } else {
+            // Sanitize: the message can carry a tool/filename-derived string.
+            addMessage("error", sanitize(String((res.output as { message?: unknown })?.message ?? "simulate failed")));
+          }
+        } catch (err: unknown) {
+          addMessage("error", sanitize(`Simulate failed: ${err instanceof Error ? err.message : String(err)}`));
+        } finally {
+          clientToolAbortRef.current = null;
+          setIsExecuting(false);
+        }
+        return;
+      }
+
       // actor get — fetch from validator RPC and format as key-value table
       if (command === "actor-get") {
         setIsExecuting(true);
@@ -1102,6 +1168,10 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         // only emits client_tool_request for advertised tools.
         const toolRegistry = new ToolRegistry();
         toolRegistry.register(makeSignTool(signHashLocally));
+        // Local simulate (COW-2461): advertised to the backend so it can run
+        // simulate_actor on this machine instead of a runner round-trip. Gated
+        // as the `simulate` class (auto-approved in auto, asks in default).
+        toolRegistry.register(makeSimulateTool());
 
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,
