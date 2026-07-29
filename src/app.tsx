@@ -36,8 +36,16 @@ import { streamChat, trimMessages, discoverModel } from "./llm-client.js";
 import type { ChatMessage } from "./llm-client.js";
 import { ACTOR_BUILDER_SYSTEM_PROMPT } from "./prompts/actor-builder.js";
 import { extractActors } from "./actor-extractor.js";
-import { createConversation, streamAgentChat, postAnswerCallback } from "./agent-client.js";
+import {
+  createConversation,
+  postSignCallback,
+  postToolResult,
+  postAnswerCallback,
+  streamAgentChat,
+} from "./agent-client.js";
 import { runAgentTurn } from "./agent-turn.js";
+import { signHashLocally, type EcdsaSignature } from "./signer.js";
+import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME } from "./client-tool-bridge.js";
 import {
   collectLocalFileContext,
   docsIndex,
@@ -46,6 +54,8 @@ import {
   retrieveSections,
 } from "./knowledge/index.js";
 import { WalkthroughPager } from "./components/WalkthroughPager.js";
+import { SignatureApproval } from "./components/SignatureApproval.js";
+import { stripTerminalControl } from "./terminal-sanitize.js";
 import { WALKTHROUGH_LESSONS } from "./walkthrough.js";
 import { checkForUpdate } from "./update-check.js";
 import { VERSION } from "./constants.js";
@@ -453,6 +463,11 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
   const [pendingExit, setPendingExit] = useState(false);
   const [activeWizard, setActiveWizard] = useState<"token-launch" | null>(null);
   const [walkthroughLesson, setWalkthroughLesson] = useState<number | null>(null);
+  // A wallet signature awaiting explicit user approval (COW-2455 / COW-2463).
+  // `pendingSignature` holds the tx summary to show; the ref's resolver is fired
+  // by the approval affordance with the user's y/n decision.
+  const [pendingSignature, setPendingSignature] = useState<string | null>(null);
+  const signatureApprovalRef = useRef<((approved: boolean) => void) | null>(null);
   const [cowboyVersion, setCowboyVersion] = useState<string | null>(null);
 
   const [history, setHistory] = useState<string[]>([]);
@@ -967,17 +982,33 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
         // backend's own knowledge tool replaces the local knowledge pack.
         const content = prompt + collectLocalFileContext(prompt);
 
+        // Local tool registry (COW-2455). Only signing is registered/advertised
+        // until the permission gate + sandbox land (COW-2463/2464); the backend
+        // only emits client_tool_request for advertised tools.
+        const toolRegistry = new ToolRegistry();
+        toolRegistry.register(makeSignTool(signHashLocally));
+
         const handle = streamAgentChat(dashboardUrl, {
           conversationId: conversationIdRef.current,
           content,
           // doc 61: run-until-done. The agent builds, tests, and self-corrects
           // across steps before reporting, instead of the build-then-stop wizard.
           mode: "agent",
+          // Advertise generic tools only. Signing is excluded: it has no
+          // approval gate on the generic path and keeps its dedicated approved
+          // route (tool_pending_signature). In PR1 this list is empty.
+          clientTools: toolRegistry
+            .supportedNames()
+            .filter((name) => name !== SIGN_TOOL_NAME),
         });
         agentAbortRef.current = handle.abort;
 
         const result = await runAgentTurn(handle.events, {
-          onSystem: (text) => addMessage("system", text),
+          // System lines interpolate backend-controlled text (tool names,
+          // summaries) — strip control/ANSI sequences at this boundary so no
+          // agent-turn path can smuggle terminal escapes to the TUI. Newlines
+          // and tabs survive (the Plan checklist renders multi-line).
+          onSystem: (text) => addMessage("system", stripTerminalControl(text)),
           onToken: (token) => {
             streamed += token;
             setStreamingText((prev) => prev + token);
@@ -1011,6 +1042,104 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
                 resolve();
               };
             }),
+          // Signing (COW-2465): REQUIRE explicit user approval, then dispatch
+          // through the shared tool registry and post over the EXISTING
+          // sign-callback wire. Dual-path — signing stays on this dedicated
+          // event/route until the backend generalizes (COW-2455). lasso must
+          // never sign a backend-provided hash unattended (COW-2463).
+          resolvePendingSignature: async (req) => {
+            const cancelBroker = async () => {
+              try {
+                await postSignCallback(dashboardUrl, {
+                  sessionId: req.sessionId,
+                  toolUseId: req.toolUseId,
+                  action: "cancel",
+                });
+              } catch {
+                /* ignore — the 5-minute broker timeout will clean up */
+              }
+            };
+
+            // Block on explicit approval before touching the key.
+            const approved = await new Promise<boolean>((resolve) => {
+              signatureApprovalRef.current = resolve;
+              setPendingSignature(req.summary);
+            });
+            setPendingSignature(null);
+            signatureApprovalRef.current = null;
+            if (!approved) {
+              await cancelBroker();
+              return "cancelled";
+            }
+
+            const outcome = await toolRegistry.dispatch({
+              toolUseId: req.toolUseId,
+              toolName: SIGN_TOOL_NAME,
+              args: { hashHex: req.hashHex },
+            });
+            if (outcome.status === "ok") {
+              try {
+                await postSignCallback(dashboardUrl, {
+                  sessionId: req.sessionId,
+                  toolUseId: req.toolUseId,
+                  action: "sign",
+                  signature: outcome.output as EcdsaSignature,
+                });
+                return "signed";
+              } catch (err) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+            }
+            // Validation/signer failure: best-effort cancel so the backend loop
+            // unblocks instead of waiting out the signature timeout.
+            await cancelBroker();
+            const message =
+              outcome.status === "error"
+                ? String((outcome.output as { message?: unknown })?.message ?? "signing failed")
+                : "signing cancelled";
+            return { error: message };
+          },
+          // Generic client-tool bridge (COW-2455). Dispatch the named local tool
+          // and post its result over the new tool-result wire (inert until the
+          // backend emits client_tool_request). A tool-level error is posted and
+          // the loop continues (the agent handles it); only a transport failure
+          // aborts, and a user cancel stops.
+          dispatchClientTool: async (req, sessionId) => {
+            // Signing is NOT offered over the generic bridge: it has no approval
+            // gate on this path yet and keeps its dedicated approved route
+            // (tool_pending_signature). Refuse it defensively even if a backend
+            // requests it unadvertised, so a hash is never signed unattended.
+            if (req.toolName === SIGN_TOOL_NAME) {
+              try {
+                await postToolResult(dashboardUrl, {
+                  sessionId,
+                  toolUseId: req.toolUseId,
+                  status: "error",
+                  output: {
+                    message: "signing is not available over the generic tool bridge",
+                  },
+                });
+              } catch (err) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+              return "continue";
+            }
+            const toolResult = await toolRegistry.dispatch(req);
+            try {
+              await postToolResult(dashboardUrl, {
+                sessionId,
+                toolUseId: req.toolUseId,
+                status: toolResult.status,
+                output:
+                  toolResult.status === "cancelled" ? undefined : toolResult.output,
+                reason:
+                  toolResult.status === "cancelled" ? toolResult.reason : undefined,
+              });
+            } catch (err) {
+              return { error: err instanceof Error ? err.message : String(err) };
+            }
+            return toolResult.status === "cancelled" ? "stop" : "continue";
+          },
         });
 
         if (result.error) {
@@ -1390,6 +1519,12 @@ export function App({ initialConfig, hasProject: initialHasProject }: AppProps) 
           onLaunch={handleTokenLaunch}
           onCancel={handleWizardCancel}
           onMessage={addMessage}
+        />
+      ) : pendingSignature !== null ? (
+        <SignatureApproval
+          summary={pendingSignature}
+          onApprove={() => signatureApprovalRef.current?.(true)}
+          onDeny={() => signatureApprovalRef.current?.(false)}
         />
       ) : (
         <InputArea

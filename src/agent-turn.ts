@@ -8,8 +8,33 @@
  */
 
 import type { AgentEvent } from "./agent-client.js";
+import type { ClientToolRequest } from "./client-tool-bridge.js";
 import { actorFromCode } from "./actor-extractor.js";
 import type { ExtractedActor } from "./actor-extractor.js";
+
+/** A `tool_pending_signature` the backend is blocking on, reduced to what the
+ *  local signer needs. */
+export interface PendingSignatureRequest {
+  /** From `stream_start`; the broker key the callback must echo. */
+  sessionId: string;
+  toolUseId: string;
+  /** The 32-byte tx hash to sign (`preview.payload.hashHex`). */
+  hashHex: string;
+  /** Human summary for the approval line. */
+  summary: string;
+}
+
+/** Outcome of resolving a pending signature. `"signed"` lets the turn continue
+ *  (the backend resumes the loop); anything else stops it. */
+export type PendingSignatureResult =
+  | "signed"
+  | "cancelled"
+  | { error: string };
+
+/** Outcome of a client_tool_request dispatch (COW-2455). `"continue"` = the tool
+ *  result was posted and the backend resumes the loop; `"stop"` = the user
+ *  cancelled/denied; `{error}` = the dispatch or the result POST failed. */
+export type ClientToolTurnOutcome = "continue" | "stop" | { error: string };
 
 export interface AgentTurnIO {
   /** Render a system status line (tool activity, notices). */
@@ -32,6 +57,30 @@ export interface AgentTurnIO {
     question: string;
     choices?: string[];
   }) => Promise<void>;
+  /** Resolve a pending signature: sign `hashHex` locally + POST the
+   *  sign-callback. Injected so runAgentTurn stays pure (no fetch / no CLI).
+   *  Absent → the legacy "can't sign, use /actor deploy" fallback. */
+  resolvePendingSignature?: (
+    req: PendingSignatureRequest
+  ) => Promise<PendingSignatureResult>;
+  /** Dispatch a generic client_tool_request (COW-2455): run the named local tool
+   *  and POST its result to resume the loop. Injected so runAgentTurn stays pure
+   *  (no registry / fetch here). Absent → the request is surfaced as an
+   *  unsupported-tool notice and the turn continues. */
+  dispatchClientTool?: (
+    req: ClientToolRequest,
+    sessionId: string
+  ) => Promise<ClientToolTurnOutcome>;
+}
+
+/** Pull the 32-byte signing hash out of a `tool_pending_signature` payload.
+ *  Returns null when it's missing/malformed. */
+export function hashHexFromPayload(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "hashHex" in payload) {
+    const h = (payload as { hashHex: unknown }).hashHex;
+    if (typeof h === "string" && h.length > 0) return h;
+  }
+  return null;
 }
 
 export interface AgentTurnResult {
@@ -73,10 +122,14 @@ export async function runAgentTurn(
   // The route and the AgentLoop each emit a stream_start on the loop path;
   // only announce the model once.
   let startShown = false;
+  // Captured from stream_start; needed to key the sign-callback (COW-2465).
+  let sessionId: string | null = null;
 
   for await (const ev of events) {
     switch (ev.type) {
       case "stream_start":
+        // Both stream_start events carry the same sessionId; keep the first.
+        if (sessionId === null) sessionId = ev.sessionId;
         if (!startShown) {
           startShown = true;
           io.onSystem(`AI agent (${ev.model})`);
@@ -180,13 +233,81 @@ export async function runAgentTurn(
         break;
       }
 
-      case "tool_pending_signature":
+      case "tool_pending_signature": {
+        const hashHex = hashHexFromPayload(ev.preview.payload);
+        // Bridge path (COW-2465): sign locally + resume the loop. Only when a
+        // resolver is injected, we captured the sessionId, and the payload
+        // carries the hash.
+        if (io.resolvePendingSignature && sessionId && hashHex) {
+          io.onSystem(`⚙ signing: ${ev.preview.summary}…`);
+          let outcome: PendingSignatureResult;
+          try {
+            outcome = await io.resolvePendingSignature({
+              sessionId,
+              toolUseId: ev.toolUseId,
+              hashHex,
+              summary: ev.preview.summary,
+            });
+          } catch (err) {
+            outcome = { error: err instanceof Error ? err.message : String(err) };
+          }
+          if (outcome === "signed") {
+            io.onSystem(`✓ signed: ${ev.preview.summary}`);
+            // Do NOT abort — the backend resumes the loop and streams on.
+            break;
+          }
+          if (outcome === "cancelled") {
+            io.onSystem("✗ signature cancelled");
+            io.abort();
+            return { finalText, wrote, error: null };
+          }
+          io.onSystem(`✗ signing failed: ${outcome.error}`);
+          io.abort();
+          return { finalText, wrote, error: outcome.error };
+        }
+        // Legacy fallback: no local signing wired.
         io.onSystem(
-          "This action needs a wallet signature — lasso can't sign agent transactions yet. " +
-            "Use /actor deploy <file> instead."
+          "This action needs a wallet signature — configure signing or use " +
+            "/actor deploy <file> instead."
         );
         io.abort();
         return { finalText, wrote, error: null };
+      }
+
+      case "client_tool_request": {
+        // Generic bridge (COW-2455). Dispatch the named local tool and post its
+        // result; the backend resumes the loop on success. Same shape as the
+        // signing case above — signing keeps its dedicated path (dual-path)
+        // until the backend generalizes.
+        if (!io.dispatchClientTool || !sessionId) {
+          io.onSystem(`⚠ unsupported local tool: ${ev.toolName}`);
+          break;
+        }
+        io.onSystem(`⚙ ${ev.summary ?? ev.toolName}…`);
+        let outcome: ClientToolTurnOutcome;
+        try {
+          outcome = await io.dispatchClientTool(
+            {
+              toolUseId: ev.toolUseId,
+              toolName: ev.toolName,
+              args: ev.args,
+              summary: ev.summary,
+            },
+            sessionId
+          );
+        } catch (err) {
+          outcome = { error: err instanceof Error ? err.message : String(err) };
+        }
+        if (outcome === "continue") break; // backend resumes; keep consuming
+        if (outcome === "stop") {
+          io.onSystem(`✗ ${ev.toolName} cancelled`);
+          io.abort();
+          return { finalText, wrote, error: null };
+        }
+        io.onSystem(`✗ ${ev.toolName} failed: ${outcome.error}`);
+        io.abort();
+        return { finalText, wrote, error: outcome.error };
+      }
 
       case "error":
         if (!ev.recoverable) {
