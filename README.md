@@ -16,7 +16,7 @@ An interactive terminal console for the Cowboy blockchain. Lasso wraps the `cowb
 ## Install
 
 ```bash
-brew install cowboyinc/lasso/lasso
+brew install cowboyinc/tap/lasso
 ```
 
 (The fully-qualified name matters — plain `lasso` is an unrelated SAML library in homebrew-core.)
