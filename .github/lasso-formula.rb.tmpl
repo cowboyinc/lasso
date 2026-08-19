@@ -1,0 +1,38 @@
+class Lasso < Formula
+  desc "Interactive terminal console for the Cowboy blockchain"
+  homepage "https://github.com/cowboyinc/lasso"
+  version "@VERSION@"
+  license "BUSL-1.1"
+
+  depends_on "cowboyinc/tap/cowboy"
+
+  on_macos do
+    on_arm do
+      url "@BASE@/lasso-darwin-arm64"
+      sha256 "@MAC_ARM@"
+    end
+    on_intel do
+      url "@BASE@/lasso-darwin-x64"
+      sha256 "@MAC_X64@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "@BASE@/lasso-linux-arm64"
+      sha256 "@LIN_ARM@"
+    end
+    on_intel do
+      url "@BASE@/lasso-linux-x64"
+      sha256 "@LIN_X64@"
+    end
+  end
+
+  def install
+    bin.install Dir["lasso-*"].first => "lasso"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/lasso --version")
+  end
+end

@@ -61,8 +61,8 @@ install-local: binary
 
 # Publishes a GitHub release for the current package.json version with the
 # cross-compiled binaries attached. Requires a clean tree on main and the
-# cby-inc gh account. The homebrew-lasso formula consumes these assets;
-# update its url/sha256 lines from build/SHA256SUMS after releasing.
+# cby-inc gh account. Prefer pushing a vX.Y.Z tag instead: the release
+# workflow builds, releases, and PRs the cowboyinc/homebrew-tap formula.
 release: check binaries
 	test -z "$$(git status --porcelain)" || (echo "ERROR: working tree is dirty"; exit 1)
 	gh release create "v$(VERSION)" \

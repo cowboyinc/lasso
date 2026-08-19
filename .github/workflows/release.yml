@@ -1,0 +1,169 @@
+name: Release
+
+# Tag-driven Homebrew release: `git tag v0.4.4 && git push --tags`
+# cross-compiles the lasso binaries, publishes a GitHub release on this
+# repo, and opens an idempotent formula PR against cowboyinc/homebrew-tap.
+# Mirrors the cowchat release workflow. Replaces the manual `make release`
+# + hand-edited formula flow.
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to (re)build and release"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck + test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Verify tag version
+        id: version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "refusing suspicious tag: $TAG" >&2
+            exit 1
+          }
+          VERSION="${TAG#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          test "$VERSION" = "$PKG_VERSION" || {
+            echo "tag/package.json version mismatch: tag=$VERSION package.json=$PKG_VERSION" >&2
+            exit 1
+          }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  release:
+    name: Build + release + formula PR
+    needs: check
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cross-compile binaries
+        run: |
+          mkdir -p build
+          bun build --compile --target=bun-darwin-arm64 src/cli.tsx --outfile build/lasso-darwin-arm64
+          bun build --compile --target=bun-darwin-x64   src/cli.tsx --outfile build/lasso-darwin-x64
+          bun build --compile --target=bun-linux-x64    src/cli.tsx --outfile build/lasso-linux-x64
+          bun build --compile --target=bun-linux-arm64  src/cli.tsx --outfile build/lasso-linux-arm64
+          cd build && shasum -a 256 lasso-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          NOTES="Lasso ${TAG}. Homebrew: \`brew install cowboyinc/tap/lasso\` (installs the cowboy CLI as a dependency)."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" build/lasso-* build/SHA256SUMS --clobber
+            gh release edit "$TAG" --prerelease=false --latest \
+              --title "lasso $TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" build/lasso-* build/SHA256SUMS \
+              --latest --title "lasso $TAG" --notes "$NOTES"
+          fi
+
+      - name: Render Homebrew formula
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/cowboyinc/lasso/releases/download/v${VERSION}"
+          sha() { shasum -a 256 "build/$1" | awk '{print $1}'; }
+          sed \
+            -e "s|@VERSION@|${VERSION}|g" \
+            -e "s|@BASE@|${BASE}|g" \
+            -e "s|@MAC_ARM@|$(sha lasso-darwin-arm64)|g" \
+            -e "s|@MAC_X64@|$(sha lasso-darwin-x64)|g" \
+            -e "s|@LIN_ARM@|$(sha lasso-linux-arm64)|g" \
+            -e "s|@LIN_X64@|$(sha lasso-linux-x64)|g" \
+            .github/lasso-formula.rb.tmpl > /tmp/lasso.rb
+
+      - name: Open formula PR against cowboyinc/homebrew-tap
+        env:
+          # TAP_PR_TOKEN: fine-grained PAT with contents+PR write on
+          # cowboyinc/homebrew-tap.
+          GH_TOKEN: ${{ secrets.TAP_PR_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          BRANCH="lasso-v${VERSION}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/cowboyinc/homebrew-tap.git" tap
+          cd tap
+          if git show origin/main:Formula/lasso.rb 2>/dev/null | cmp -s - /tmp/lasso.rb; then
+            echo "rendered formula already on main; nothing to do"
+            exit 0
+          fi
+          if git ls-remote --exit-code origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            git checkout -b "$BRANCH" "origin/${BRANCH}"
+            if [ -f Formula/lasso.rb ] && ! cmp -s /tmp/lasso.rb Formula/lasso.rb; then
+              echo "Formula/lasso.rb on the existing ${BRANCH} branch differs from the render — human edits present; resolve manually" >&2
+              exit 1
+            fi
+          else
+            git checkout -b "$BRANCH"
+          fi
+          mkdir -p Formula
+          cp /tmp/lasso.rb Formula/lasso.rb
+          git -c user.name=lasso-release -c user.email=noreply@cowboy.inc \
+            add Formula/lasso.rb
+          if ! git diff --cached --quiet; then
+            git -c user.name=lasso-release -c user.email=noreply@cowboy.inc \
+              commit -m "lasso v${VERSION}"
+            git push origin "$BRANCH"
+          fi
+          gh pr create --repo cowboyinc/homebrew-tap \
+            --head "$BRANCH" --base main \
+            --title "lasso v${VERSION}" \
+            --body "Automated formula bump from the lasso release workflow (release: https://github.com/cowboyinc/lasso/releases/tag/v${VERSION})." || true
+          OPEN=$(gh pr list --repo cowboyinc/homebrew-tap \
+            --head "$BRANCH" --state open --json number --jq 'length')
+          [ "$OPEN" -ge 1 ] || {
+            echo "no open formula PR for ${BRANCH}" >&2
+            exit 1
+          }
