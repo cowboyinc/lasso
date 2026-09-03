@@ -131,8 +131,23 @@ export function saveSyncState(root: string, state: SyncState): void {
 
 // ── Volume naming ────────────────────────────────────────────────────────────
 
-/** Derive a CIP-9-valid default volume name from the project directory. */
-export function defaultVolumeName(root: string): string {
+/**
+ * The volume the harness mounts as the caller workspace on a Cattle Guard
+ * run (`RUNNER_WORKSPACE_VOLUME`, default `workspace` on every runner). Sync
+ * defaults to the same volume so the local project and the workspace the
+ * agent works in on the runner are one place.
+ */
+export const WORKSPACE_VOLUME = "workspace";
+
+/** Default sync volume. The project directory no longer picks the name; a
+ *  per-project volume can still be chosen explicitly with `/sync push <name>`. */
+export function defaultVolumeName(_root: string): string {
+  return WORKSPACE_VOLUME;
+}
+
+/** CIP-9-valid volume name derived from a directory name (kept for callers
+ *  that want a per-project volume). */
+export function volumeNameFromDir(root: string): string {
   const sanitized = basename(root)
     .replace(/[^A-Za-z0-9._-]/g, "-")
     .replace(/^[-.]+/, "")

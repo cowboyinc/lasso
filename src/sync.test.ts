@@ -6,6 +6,8 @@ import { join } from "node:path";
 import {
   MAX_PUSH_FILE_BYTES,
   defaultVolumeName,
+  volumeNameFromDir,
+  WORKSPACE_VOLUME,
   collectLocalFiles,
   planPush,
   batchForUpload,
@@ -78,11 +80,16 @@ function fakeClient(state: Partial<FakeClientState> = {}): {
 
 // ── volume naming ────────────────────────────────────────────────────────────
 
-test("defaultVolumeName: sanitizes to the CIP-9 charset", () => {
-  assert.equal(defaultVolumeName("/tmp/My Cool Project!"), "My-Cool-Project-");
-  assert.equal(defaultVolumeName("/tmp/.hidden"), "hidden");
-  assert.match(defaultVolumeName(`/tmp/${"x".repeat(80)}`), /^x{64}$/);
-  assert.equal(defaultVolumeName("/tmp/---"), "project");
+test("defaultVolumeName: is the harness workspace volume regardless of directory", () => {
+  assert.equal(defaultVolumeName("/tmp/My Cool Project!"), WORKSPACE_VOLUME);
+  assert.equal(defaultVolumeName("/srv/other"), "workspace");
+});
+
+test("volumeNameFromDir: sanitizes to the CIP-9 charset", () => {
+  assert.equal(volumeNameFromDir("/tmp/My Cool Project!"), "My-Cool-Project-");
+  assert.equal(volumeNameFromDir("/tmp/.hidden"), "hidden");
+  assert.match(volumeNameFromDir(`/tmp/${"x".repeat(80)}`), /^x{64}$/);
+  assert.equal(volumeNameFromDir("/tmp/---"), "project");
 });
 
 // ── enumeration ──────────────────────────────────────────────────────────────

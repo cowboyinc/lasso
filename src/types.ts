@@ -14,6 +14,7 @@ export interface RunnerPreferences {
 export interface ProjectConfig {
   validatorUrl: string;
   dashboardUrl: string | null;
+  cattleGuardUrl: string | null;
   walletAddress: string | null;
   runnerUrl: string | null;
   actors: ActorEntry[];
@@ -23,6 +24,7 @@ export interface ProjectConfig {
 export interface SessionState {
   validatorUrl: string;
   dashboardUrl: string | null;
+  cattleGuardUrl: string | null;
   walletAddress: string | null;
   runnerUrl: string | null;
   actors: ActorEntry[];

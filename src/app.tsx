@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, lstatSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { Box, Static, useApp } from "ink";
@@ -44,8 +45,13 @@ import {
   streamAgentChat,
 } from "./agent-client.js";
 import { runAgentTurn } from "./agent-turn.js";
-import { signHashLocally, type EcdsaSignature } from "./signer.js";
-import { ToolRegistry, makeSignTool, SIGN_TOOL_NAME, DEFAULT_TOOL_TIMEOUT_MS } from "./client-tool-bridge.js";
+import { signHashLocally, signTransactionHashLocally, type EcdsaSignature } from "./signer.js";
+import {
+  ToolRegistry,
+  makeSignTool,
+  SIGN_TOOL_NAME,
+  DEFAULT_TOOL_TIMEOUT_MS,
+} from "./client-tool-bridge.js";
 import {
   makeSimulateTool,
   SIMULATE_TOOL_NAME,
@@ -67,6 +73,7 @@ import {
   formatPushResult,
   loadSyncState,
   runSyncPush,
+  WORKSPACE_VOLUME,
 } from "./sync.js";
 import { diffLines } from "./diff.js";
 import { decide, decideWrite, type PermissionClass, type PermissionMode } from "./permissions.js";
@@ -82,8 +89,19 @@ import { WalkthroughPager } from "./components/WalkthroughPager.js";
 import { ApprovalPrompt } from "./components/ApprovalPrompt.js";
 import { stripTerminalControl } from "./terminal-sanitize.js";
 import { WALKTHROUGH_LESSONS } from "./walkthrough.js";
-import { checkForUpdate } from "./update-check.js";
+import { checkForUpdate, isNewerVersion } from "./update-check.js";
 import { VERSION } from "./constants.js";
+import {
+  CattleGuardClient,
+  loadOrCreateClientInstanceId,
+  type WorkspaceDelegationBundle,
+} from "./cattle-guard-client.js";
+import { runCattleGuardTurn, type PendingRequestOutcome } from "./cattle-guard-turn.js";
+import { DashboardConversationsClient } from "./dashboard-conversations.js";
+import {
+  WorkspaceDelegationClient,
+  ensureWorkspaceDelegation,
+} from "./workspace-delegation.js";
 
 /** Strip ANSI escapes and control characters from untrusted strings. */
 function sanitize(s: string): string {
@@ -94,6 +112,18 @@ function sanitize(s: string): string {
 function shortAddr(addr: string): string {
   const hex = addr.startsWith("0x") ? addr : `0x${addr}`;
   return `${hex.slice(0, 6)}...${hex.slice(-4)}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizedHash(value: string): string {
+  const hex = value.replace(/^0x/i, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("invalid 32-byte signing hash");
+  return `0x${hex}`;
 }
 
 function formatTokenList(raw: string): string {
@@ -573,6 +603,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
   const [session, setSession] = useState<SessionState>({
     validatorUrl: initialConfig.validatorUrl,
     dashboardUrl: initialConfig.dashboardUrl,
+    cattleGuardUrl: initialConfig.cattleGuardUrl,
     walletAddress: initialConfig.walletAddress,
     runnerUrl: initialConfig.runnerUrl,
     actors: initialConfig.actors,
@@ -588,10 +619,22 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
   // lazily on the first AI prompt. abort ref lets Ctrl+C cancel a stream.
   const conversationIdRef = useRef<string | null>(null);
   const agentAbortRef = useRef<(() => void) | null>(null);
+  const cattleClientRef = useRef<{ key: string; client: CattleGuardClient } | null>(null);
+  // The wallet's CBFS delegation bundle for this session. A delegate
+  // credential: held in memory only, never written to disk, dropped when a
+  // runner refuses it, and fetched again (one signed challenge) on relaunch.
+  const workspaceBundleRef = useRef<{ wallet: string; bundle: WorkspaceDelegationBundle } | null>(
+    null
+  );
+  const dashboardConversationsRef = useRef<{
+    key: string;
+    client: DashboardConversationsClient;
+  } | null>(null);
   // ask_user (PR #177): while a run blocks on a question, the next submitted
   // line is the ANSWER (not a new turn). answerResolverRef holds the resolver;
   // pendingQuestionRef holds the choices for number-shortcut mapping.
   const answerResolverRef = useRef<((answer: string) => void) | null>(null);
+  const questionCancelRef = useRef<(() => void) | null>(null);
   const pendingQuestionRef = useRef<{ choices: string[] } | null>(null);
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   // Aborts a local tool that's mid-run (COW-2457): Ctrl-C cancels the in-flight
@@ -769,18 +812,18 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
     }
     // Project onboarding: say where we're connected so it's clear at a glance.
     let backend: string;
-    if (initialConfig.dashboardUrl) {
-      let origin = initialConfig.dashboardUrl;
+    if (initialConfig.cattleGuardUrl) {
+      let origin = initialConfig.cattleGuardUrl;
       try {
-        origin = new URL(initialConfig.dashboardUrl).origin; // show only the origin
+        origin = new URL(initialConfig.cattleGuardUrl).origin;
       } catch {
-        /* unparseable configured URL — show it as-is rather than crash startup */
+        // Leave the configured value intact for the startup message.
       }
-      backend = `agent backend ${origin}`;
+      backend = `Cattle Guard ${origin}`;
     } else if (initialConfig.runnerUrl) {
       backend = "direct runner mode";
     } else {
-      backend = "no AI backend (set dashboard_url in .cowboy/config.json)";
+      backend = "no AI backend (set cattle_guard_url in .cowboy/config.json)";
     }
     addMessage(
       "system",
@@ -799,6 +842,11 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         addMessage(
           "system",
           "The cowboy CLI wasn't detected — actor deploy/execute and wallet commands need it. Install: brew install cowboyinc/lasso/cowboy"
+        );
+      } else if (initialConfig.cattleGuardUrl && isNewerVersion("0.0.34", v)) {
+        addMessage(
+          "system",
+          `Cattle Guard signing needs cowboy CLI 0.0.34 or newer (detected ${v}). Upgrade: brew upgrade cowboyinc/lasso/cowboy`
         );
       }
     });
@@ -1367,6 +1415,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
             setSession({
               validatorUrl: freshConfig.validatorUrl,
               dashboardUrl: freshConfig.dashboardUrl,
+              cattleGuardUrl: freshConfig.cattleGuardUrl,
               walletAddress: walletMatch ? walletMatch[1] : freshConfig.walletAddress,
               runnerUrl: freshConfig.runnerUrl,
               actors: freshConfig.actors,
@@ -1540,10 +1589,19 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
             new Promise<void>((resolve) => {
               pendingQuestionRef.current = { choices: q.choices ?? [] };
               setAwaitingAnswer(true);
-              answerResolverRef.current = async (answer) => {
+              let settled = false;
+              const finish = () => {
+                if (settled) return;
+                settled = true;
                 answerResolverRef.current = null;
+                questionCancelRef.current = null;
                 pendingQuestionRef.current = null;
                 setAwaitingAnswer(false);
+                resolve();
+              };
+              questionCancelRef.current = finish;
+              answerResolverRef.current = async (answer) => {
+                answerResolverRef.current = null;
                 try {
                   await postAnswerCallback(dashboardUrl, {
                     sessionId: q.sessionId,
@@ -1554,7 +1612,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
                 } catch (err) {
                   addMessage("error", err instanceof Error ? err.message : String(err));
                 }
-                resolve();
+                finish();
               };
             }),
           // Signing (COW-2465): REQUIRE explicit user approval, then dispatch
@@ -1799,17 +1857,369 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
     [session, addMessage, requestApproval]
   );
 
+  const runCattleGuardPrompt = useCallback(
+    async (prompt: string) => {
+      const cattleGuardUrl = session.cattleGuardUrl;
+      const walletAddress = session.walletAddress;
+      if (!cattleGuardUrl || !walletAddress) {
+        addMessage("error", "Cattle Guard needs a configured endpoint and local wallet.");
+        return;
+      }
+
+      setIsExecuting(true);
+      setStreamingText("");
+      let streamed = "";
+
+      try {
+        const cattleKey = `${cattleGuardUrl}\0${walletAddress.toLowerCase()}`;
+        if (cattleClientRef.current?.key !== cattleKey) {
+          cattleClientRef.current = {
+            key: cattleKey,
+            client: new CattleGuardClient({
+              baseUrl: cattleGuardUrl,
+              walletAddress,
+              clientInstanceId: loadOrCreateClientInstanceId(),
+              signHash: signHashLocally,
+            }),
+          };
+        }
+        const cattleClient = cattleClientRef.current.client;
+
+        let dashboardClient: DashboardConversationsClient | null = null;
+        if (session.dashboardUrl) {
+          const dashboardKey = `${session.dashboardUrl}\0${walletAddress.toLowerCase()}`;
+          if (dashboardConversationsRef.current?.key !== dashboardKey) {
+            dashboardConversationsRef.current = {
+              key: dashboardKey,
+              client: new DashboardConversationsClient({
+                dashboardUrl: session.dashboardUrl,
+                walletAddress,
+                signHash: signHashLocally,
+              }),
+            };
+          }
+          dashboardClient = dashboardConversationsRef.current.client;
+        }
+
+        if (!conversationIdRef.current) {
+          if (dashboardClient) {
+            try {
+              conversationIdRef.current = await dashboardClient.createConversation(prompt);
+            } catch (error) {
+              addMessage(
+                "system",
+                `Dashboard history unavailable; continuing with a local conversation: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            }
+          }
+          conversationIdRef.current ??= randomUUID().toLowerCase();
+        }
+
+        const toolRegistry = new ToolRegistry();
+        toolRegistry.register({ ...makeListTool(), name: "local_list" });
+        toolRegistry.register({ ...makeReadFileTool(), name: "local_read" });
+        toolRegistry.register({ ...makeWriteFileTool(), name: "local_write" });
+
+        // Workspace delegation: the runner mounts the wallet's `workspace`
+        // volume for the turn and refuses turns without one. Held in memory
+        // for the session after the first fetch; minting needs the dashboard
+        // and an explicit approval because it signs with the project key.
+        const walletKey = walletAddress.toLowerCase();
+        let workspaceDelegation: WorkspaceDelegationBundle | undefined;
+        if (session.dashboardUrl) {
+          try {
+            const delegationClient = new WorkspaceDelegationClient({
+              dashboardUrl: session.dashboardUrl,
+              walletAddress,
+              signHash: signHashLocally,
+            });
+            const held =
+              workspaceBundleRef.current?.wallet === walletKey
+                ? workspaceBundleRef.current.bundle
+                : null;
+            workspaceDelegation =
+              (await ensureWorkspaceDelegation({
+                client: delegationClient,
+                held,
+                approveMint: () =>
+                  requestApproval("sign", {
+                    title: "Enable the cloud workspace for this wallet?",
+                    summary: [
+                      `The agent works in the CBFS volume "${WORKSPACE_VOLUME}" owned by ${shortAddr(walletAddress)}.`,
+                      "Enabling it signs two CIP-9 delegation hashes with the project key and registers the delegation on chain through the dashboard.",
+                      "This happens once per wallet; the dashboard Files page uses the same delegation.",
+                    ].join("\n"),
+                    approveLabel: "enable",
+                    denyLabel: "skip",
+                  }),
+                onSystem: (text) => addMessage("system", text),
+              })) ?? undefined;
+            workspaceBundleRef.current = workspaceDelegation
+              ? { wallet: walletKey, bundle: workspaceDelegation }
+              : null;
+          } catch (error) {
+            addMessage(
+              "system",
+              `Workspace delegation unavailable; this turn runs without a cloud workspace: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        } else {
+          addMessage(
+            "system",
+            "No dashboard configured; this turn runs without a cloud workspace and the runner may refuse it."
+          );
+        }
+
+        const run = await cattleClient.startRun({
+          conversationId: conversationIdRef.current,
+          query: prompt,
+          clientTools: toolRegistry.supportedNames(),
+          ...(workspaceDelegation ? { workspaceDelegation } : {}),
+        });
+        agentAbortRef.current = () => {
+          void run.interrupt().catch(() => undefined);
+          run.abort();
+        };
+
+        if (dashboardClient) {
+          try {
+            await dashboardClient.registerRun(
+              conversationIdRef.current,
+              run.runId,
+              prompt
+            );
+          } catch (error) {
+            addMessage(
+              "system",
+              `Dashboard could not persist this run: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        }
+
+        const result = await runCattleGuardTurn(run.events(), {
+          onSystem: (text) => addMessage("system", stripTerminalControl(text)),
+          onWorkspaceRefused: () => {
+            workspaceBundleRef.current = null;
+            addMessage(
+              "system",
+              "The runner refused the workspace delegation; the held bundle was dropped and the next turn fetches a fresh one. If it repeats, re-enable file storage on the dashboard Files page."
+            );
+          },
+          onToken: (token) => {
+            streamed += token;
+            setStreamingText((previous) => previous + token);
+          },
+          writeActor: async (actor) => {
+            const { scope, resolved, root } = classifyWritePath(actor.filePath);
+            const approved = await requestApproval("write", {
+              title: `Write ${actor.filePath}?`,
+              summary: `Target: ${resolved || actor.filePath}\nScope: ${scope} (project root: ${root})\n${actor.code.length} bytes from the agent.`,
+              scope,
+            });
+            if (!approved) return false;
+            mkdirSync(dirname(resolved), { recursive: true });
+            writeFileSync(resolved, actor.code + "\n", "utf8");
+            return true;
+          },
+          onQuestion: (event) =>
+            new Promise<PendingRequestOutcome>((resolve) => {
+              pendingQuestionRef.current = { choices: event.choices };
+              setAwaitingAnswer(true);
+              let settled = false;
+              const finish = (outcome: PendingRequestOutcome) => {
+                if (settled) return;
+                settled = true;
+                answerResolverRef.current = null;
+                questionCancelRef.current = null;
+                pendingQuestionRef.current = null;
+                setAwaitingAnswer(false);
+                resolve(outcome);
+              };
+              questionCancelRef.current = () => finish("stop");
+              answerResolverRef.current = async (answer) => {
+                answerResolverRef.current = null;
+                try {
+                  await run.respond(event.requestId, "question", { answer });
+                  finish("continue");
+                } catch (error) {
+                  finish({ error: error instanceof Error ? error.message : String(error) });
+                }
+              };
+            }),
+          onSignature: async (event) => {
+            try {
+              const request = await run.protectedRequest(event.requestId);
+              if (request.kind !== "signature") throw new Error("signature request kind changed");
+              const payload = asRecord(request.payload);
+              const signingHash = payload?.signing_hash;
+              const unsignedTxHex = payload?.unsigned_tx_hex;
+              if (typeof signingHash !== "string" || typeof unsignedTxHex !== "string") {
+                throw new Error("signature request omitted the protected transaction bytes");
+              }
+              const exactHash = normalizedHash(signingHash);
+              if (exactHash !== normalizedHash(event.signingHash)) {
+                throw new Error("public and protected signing hashes do not match");
+              }
+              const preview = asRecord(event.preview);
+              const summary =
+                typeof preview?.summary === "string" ? preview.summary : "Review and sign this transaction";
+              const approved = await requestApproval("sign", {
+                title: "Signature required",
+                summary: `${summary}\n\nVerified hash: ${exactHash}`,
+                approveLabel: "sign",
+                denyLabel: "cancel",
+              });
+              if (!approved) {
+                await run.respond(event.requestId, "signature", { cancelled: true });
+                return "continue";
+              }
+              const controller = new AbortController();
+              clientToolAbortRef.current = controller;
+              const signature = await signTransactionHashLocally(
+                exactHash,
+                unsignedTxHex,
+                walletAddress,
+                controller.signal
+              );
+              clientToolAbortRef.current = null;
+              await run.respond(event.requestId, "signature", {
+                signature: { r: signature.r, s: signature.s, v: signature.v },
+              });
+              return "continue";
+            } catch (error) {
+              clientToolAbortRef.current = null;
+              return { error: error instanceof Error ? error.message : String(error) };
+            }
+          },
+          onApproval: async (event) => {
+            try {
+              const request = await run.protectedRequest(event.requestId);
+              if (request.kind !== "approval") throw new Error("approval request kind changed");
+              const payload = asRecord(request.payload);
+              const argv = payload?.argv;
+              if (!Array.isArray(argv) || !argv.every((value) => typeof value === "string")) {
+                throw new Error("command approval omitted its exact argument vector");
+              }
+              const command = argv.map((value) => JSON.stringify(value)).join(" ");
+              const approved = await requestApproval("exec", {
+                title: "Allow command?",
+                summary: `Exact arguments:\n${command}`,
+                approveLabel: "allow once",
+                denyLabel: "deny",
+              });
+              await run.respond(event.requestId, "approval", { approved });
+              return "continue";
+            } catch (error) {
+              return { error: error instanceof Error ? error.message : String(error) };
+            }
+          },
+          onClientTool: async (event) => {
+            try {
+              const request = await run.protectedRequest(event.requestId);
+              if (request.kind !== "client_tool") throw new Error("client-tool request kind changed");
+              const permission = toolRegistry.permissionOf(event.toolName);
+              if (permission === undefined) {
+                await run.respond(event.requestId, "client_tool", {
+                  status: "error",
+                  errorCode: "unknown_tool",
+                  output: { message: `unsupported local tool: ${event.toolName}` },
+                });
+                return "continue";
+              }
+
+              let scope: WriteScope | undefined;
+              let summary = `The agent wants to run ${event.toolName}.`;
+              if (permission === "write") {
+                const args = asRecord(request.payload);
+                const path = args?.path;
+                if (typeof path === "string") {
+                  const classified = classifyWritePath(path, process.cwd());
+                  scope = classified.scope;
+                  const diff =
+                    scope === "invalid" || scope === "outside"
+                      ? ""
+                      : buildWriteDiff(classified.resolved, args ?? {});
+                  summary = `Target: ${classified.resolved || path}\nScope: ${scope} (project root: ${classified.root})${diff}`;
+                }
+              }
+              const approved = await requestApproval(permission, {
+                title: `Allow ${event.toolName}?`,
+                summary,
+                scope,
+              });
+              if (!approved) {
+                await run.respond(event.requestId, "client_tool", { cancelled: true });
+                return "continue";
+              }
+
+              const controller = new AbortController();
+              clientToolAbortRef.current = controller;
+              const toolResult = await toolRegistry.dispatch(
+                {
+                  toolUseId: event.toolUseId,
+                  toolName: event.toolName,
+                  args: request.payload,
+                },
+                { signal: controller.signal }
+              );
+              clientToolAbortRef.current = null;
+              await run.respond(event.requestId, "client_tool", toolResult);
+              return toolResult.status === "cancelled" && toolResult.reason === "user_cancelled"
+                ? "stop"
+                : "continue";
+            } catch (error) {
+              clientToolAbortRef.current = null;
+              return { error: error instanceof Error ? error.message : String(error) };
+            }
+          },
+        });
+
+        if (result.error) {
+          if (streamed.trim()) addMessage("output", streamed);
+          addMessage("error", `AI builder failed: ${result.error}`);
+        } else {
+          const finalText = result.finalText ?? streamed;
+          if (finalText.trim()) addMessage("output", finalText);
+        }
+        if (result.wrote.length > 0) {
+          addMessage("system", `Deploy with: /actor deploy ${result.wrote[0].filePath}`);
+        }
+      } catch (error) {
+        const aborted = error instanceof Error && error.name === "AbortError";
+        if (!aborted) {
+          if (streamed.trim()) addMessage("output", streamed);
+          addMessage(
+            "error",
+            `AI builder failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      } finally {
+        agentAbortRef.current = null;
+        clientToolAbortRef.current = null;
+        setIsExecuting(false);
+        setStreamingText("");
+      }
+    },
+    [session, addMessage, requestApproval]
+  );
+
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
-      if (session.dashboardUrl) {
-        await runAgentPrompt(prompt);
+      if (session.cattleGuardUrl) {
+        await runCattleGuardPrompt(prompt);
         return;
       }
 
       if (!session.runnerUrl) {
         addMessage(
           "error",
-          "No AI endpoint configured. Set dashboard_url (or runner_url for direct mode) in .cowboy/config.json, or run /init."
+          "No AI endpoint configured. Set cattle_guard_url (or runner_url for direct mode) in .cowboy/config.json, or run /init."
         );
         return;
       }
@@ -1920,7 +2330,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         setStreamingText("");
       }
     },
-    [session, addMessage, runAgentPrompt, requestApproval]
+    [session, addMessage, runCattleGuardPrompt, requestApproval]
   );
 
   const handleSubmit = useCallback(
@@ -2113,6 +2523,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
     if (isExecuting) {
       // Cancel an in-flight local tool first (COW-2457) — kills its CLI child
       // and yields a `cancelled` result — then tear down the stream.
+      questionCancelRef.current?.();
       if (clientToolAbortRef.current) {
         clientToolAbortRef.current.abort();
         clientToolAbortRef.current = null;
@@ -2219,6 +2630,7 @@ export function App({ initialConfig, hasProject: initialHasProject, movedIntoPro
         runnerPreferences={session.runnerPreferences}
         runnerUrl={session.runnerUrl}
         dashboardUrl={session.dashboardUrl}
+        cattleGuardUrl={session.cattleGuardUrl}
         permissionMode={permissionMode}
       />
     </Box>

@@ -48,7 +48,7 @@ test("job commands require a job id and parse flags", () => {
 test("help documents the slash-command and AI split", () => {
   const result = parseCommand("/help");
   assert.equal(result.type, "output");
-  assert.match(result.text, /Plain text submits an AI job to the runner network\./);
+  assert.match(result.text, /Plain text starts a wallet-authenticated harness run through Cattle Guard\./);
   assert.match(result.text, /Every local command starts with \//);
 });
 

@@ -29,6 +29,7 @@ none — run /init to create one.`;
 const DEFAULT_CONFIG: ProjectConfig = {
   validatorUrl: "https://rpc.mesa.cowboylabs.net",
   dashboardUrl: DEFAULT_DASHBOARD_URL,
+  cattleGuardUrl: null,
   walletAddress: null,
   runnerUrl: null,
   actors: [],

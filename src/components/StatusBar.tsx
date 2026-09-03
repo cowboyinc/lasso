@@ -13,10 +13,11 @@ interface StatusBarProps {
   runnerPreferences: RunnerPreferences;
   runnerUrl: string | null;
   dashboardUrl: string | null;
+  cattleGuardUrl: string | null;
   permissionMode: PermissionMode;
 }
 
-export function StatusBar({ validatorUrl, hasKey, walletAddress, walletBalance, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl, permissionMode }: StatusBarProps) {
+export function StatusBar({ validatorUrl, hasKey, walletAddress, walletBalance, cowboyVersion, runnerPreferences, runnerUrl, dashboardUrl, cattleGuardUrl, permissionMode }: StatusBarProps) {
   const shortWallet = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
     : null;
@@ -26,9 +27,7 @@ export function StatusBar({ validatorUrl, hasKey, walletAddress, walletBalance, 
       ? `${(walletBalance / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 })} CBY`
       : null;
 
-  // Mirrors handlePromptSubmit's routing rule: dashboard agent first,
-  // direct runner second — so the label can't disagree with behavior.
-  const aiMode = dashboardUrl ? "dashboard" : runnerUrl ? "direct" : "off";
+  const aiMode = cattleGuardUrl ? "cattle-guard" : runnerUrl ? "direct" : dashboardUrl ? "dashboard" : "off";
 
   return (
     <Box paddingX={1} justifyContent="space-between">

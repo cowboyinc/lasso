@@ -83,7 +83,9 @@ Lasso runs as a persistent terminal session built with [Ink](https://github.com/
 - **`actor deploy`** extracts the actor address and tracks it locally
 - **`actor list`** is a lasso-only command that lists all actors you've deployed from this console
 - **`faucet`** and the launch-time auto-fund call the validator's `POST /faucet` endpoint directly
-- **plain text** goes to the AI actor builder, grounded by a bundled Cowboy knowledge pack (see `/docs`) and any local `actors/*.py` files you reference by path
+- **plain text** starts the Cowboy harness through Cattle Guard, with wallet-proven admission and resumable event streaming
+- **local harness tools** stay inside the project sandbox; reads exclude protected paths, while writes, commands, deploys, and signatures use Lasso's approval policy
+- **Dashboard** stores the conversation and native run reference when available, but it is no longer the harness transport
 
 The status bar at the bottom shows the current network, project status, and wallet address.
 
@@ -113,19 +115,45 @@ Config is stored at `.cowboy/config.json` in the project directory (written by `
 
 - `rpc_url` - the target validator endpoint (default: `https://rpc.mesa.cowboylabs.net`)
 - `key_file` - wallet key location under `.cowboy/keys/`
-- `dashboard_url` - dashboard API base URL (default: `https://dashboard.mesa.cowboylabs.net`); drives the AI builder and live actor lists
-- `runner_url` - OpenAI-compatible runner endpoint; used by the AI builder only when `dashboard_url` is set to `""`
+- `cattle_guard_url` - Cattle Guard origin for harness runs; Canyon automatically selects `https://cattle-guard.canyon.cowboylabs.net`
+- `dashboard_url` - dashboard API origin for conversation history, native-run registration, files, and live actor lists; known networks automatically select their matching dashboard
+- `runner_url` - optional OpenAI-compatible runner endpoint used only as the legacy direct fallback when Cattle Guard is not configured
 - `actors` - deployed actor addresses and labels
 
 ### AI builder backends
 
-Plain-text prompts go to the Cowboy dashboard agent at
-`https://dashboard.mesa.cowboylabs.net` (configurable via `dashboard_url`
-in `.cowboy/config.json`). The agent generates actor code server-side;
-lasso writes it to `actors/<name>/main.py` and suggests `/actor deploy`.
+On Canyon, plain-text prompts go directly to Cattle Guard at
+`https://cattle-guard.canyon.cowboylabs.net`. Lasso negotiates the protocol,
+proves control of the project wallet, streams durable harness events, and
+services the canonical `local_list`, `local_read`, and `local_write` tools.
+Dashboard receives a wallet-proven conversation and run reference so the same
+work remains visible there; it does not proxy the harness stream.
 
-To use a direct vLLM runner instead (the pre-0.4 behavior), set
-`"dashboard_url": ""` and point `runner_url` at your runner.
+Each turn carries the wallet's CIP-9 workspace delegation, so the harness
+mounts the wallet's `workspace` CBFS volume and the agent's files persist
+there. Lasso fetches the bundle from the dashboard through a one-time signed
+challenge and holds it in memory for the session only. A wallet without a
+delegation is asked once to enable it; the mint signs two delegation hashes
+with the project key. `/sync` uses the same `workspace` volume by default.
+
+Transaction requests are fetched from Cattle Guard's protected request API.
+Lasso shows an approval and uses `cowboy transaction sign-hash
+--expect-tx-hex` to decode the exact unsigned transaction, recompute its hash,
+and confirm the active wallet is a signer before returning a signature. This
+path requires Cowboy CLI 0.0.34 or newer.
+
+Cattle Guard endpoints are intentionally restricted to the Canyon production
+origin or a loopback development origin because the requests carry replayable
+wallet access proofs. Unknown RPC environments do not inherit a Canyon or Mesa
+backend automatically.
+
+Google-backed Dashboard wallets require an explicit end-to-end encrypted
+browser pairing flow; the backend cannot download those keys because it never
+possesses the Drive token or decrypted wallet. The proposed `/login` contract
+is documented in [`docs/GOOGLE_WALLET_PAIRING.md`](docs/GOOGLE_WALLET_PAIRING.md).
+
+To use a direct vLLM runner instead, omit `cattle_guard_url` and point
+`runner_url` at your runner.
 
 ## License
 

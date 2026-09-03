@@ -12,6 +12,13 @@ test("parseSignHashOutput: ignores warning lines before the JSON", () => {
   assert.deepEqual(parseSignHashOutput(out), { r: "0xaa", s: "0xbb", v: 1 });
 });
 
+test("parseSignHashOutput: preserves the CLI signer address", () => {
+  assert.deepEqual(
+    parseSignHashOutput('{"address":"0xabcd","r":"0xaa","s":"0xbb","v":1}'),
+    { address: "0xabcd", r: "0xaa", s: "0xbb", v: 1 }
+  );
+});
+
 test("parseSignHashOutput: throws on no JSON", () => {
   assert.throws(() => parseSignHashOutput("no json here"), /no JSON/);
 });

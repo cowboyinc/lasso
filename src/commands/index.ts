@@ -828,7 +828,7 @@ function handleHelp(): CommandResult {
   const helpText = [
     "Slash Commands:",
     "",
-    "  Plain text submits an AI job to the runner network.",
+    "  Plain text starts a wallet-authenticated harness run through Cattle Guard.",
     "  Every local command starts with /",
     "",
     "  General:",

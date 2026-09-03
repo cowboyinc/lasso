@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadProjectConfig, normalizeEndpointUrl, DEFAULT_DASHBOARD_URL } from "./config.js";
+import {
+  CANYON_CATTLE_GUARD_URL,
+  CANYON_DASHBOARD_URL,
+  DEFAULT_DASHBOARD_URL,
+  loadProjectConfig,
+  normalizeEndpointUrl,
+  resolveCattleGuardUrl,
+} from "./config.js";
 
 test("normalizeEndpointUrl adds http scheme when missing", () => {
   assert.equal(
@@ -74,6 +81,47 @@ test("dashboard_url defaults to the mesa dashboard when absent", () => {
     assert.ok(config);
     assert.equal(config.dashboardUrl, DEFAULT_DASHBOARD_URL);
   });
+});
+
+test("canyon RPC selects the matching dashboard and Cattle Guard origins", () => {
+  withTempConfig({ rpc_url: "https://rpc.canyon.cowboylabs.net" }, () => {
+    const config = loadProjectConfig();
+    assert.ok(config);
+    assert.equal(config.dashboardUrl, CANYON_DASHBOARD_URL);
+    assert.equal(config.cattleGuardUrl, CANYON_CATTLE_GUARD_URL);
+  });
+});
+
+test("unknown RPC does not silently cross environments", () => {
+  withTempConfig({ rpc_url: "https://rpc.example.com" }, () => {
+    const config = loadProjectConfig();
+    assert.ok(config);
+    assert.equal(config.dashboardUrl, null);
+    assert.equal(config.cattleGuardUrl, null);
+  });
+});
+
+test("Cattle Guard accepts only Canyon or loopback origins", () => {
+  assert.equal(
+    resolveCattleGuardUrl("https://cattle-guard.canyon.cowboylabs.net", "https://rpc.canyon.cowboylabs.net"),
+    CANYON_CATTLE_GUARD_URL
+  );
+  assert.equal(
+    resolveCattleGuardUrl("localhost:8787", "https://rpc.example.com"),
+    "http://localhost:8787"
+  );
+  assert.equal(
+    resolveCattleGuardUrl("https://localhost:8787", "https://rpc.example.com"),
+    "https://localhost:8787"
+  );
+  assert.equal(
+    resolveCattleGuardUrl("https://attacker.example", "https://rpc.canyon.cowboylabs.net"),
+    null
+  );
+  assert.equal(
+    resolveCattleGuardUrl("https://user@cattle-guard.canyon.cowboylabs.net", "https://rpc.canyon.cowboylabs.net"),
+    null
+  );
 });
 
 test("dashboard_url empty string opts out (direct-runner mode)", () => {
