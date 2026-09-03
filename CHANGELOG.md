@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Binary builds on main were failing on `bun install --frozen-lockfile`.** `bun.lock` had not been regenerated since March while `@noble/hashes` and `node-pty` were added to package.json, so the Build Lasso Binaries job failed on every push. The lockfile now matches package.json.
+
 ### Changed
 - **Cloud workspace on every Cattle Guard turn.** Lasso now attaches the wallet's CIP-9 workspace delegation to each run, the same bundle the dashboard attaches for browser-started runs, so the harness mounts the wallet's `workspace` volume and runners that serve caller workspaces accept the turn. The bundle is fetched from the dashboard through a one-time challenge: a files-scope proof mints a nonce, lasso signs the returned statement only after checking it names the expected purpose, its own wallet, that nonce and the dashboard host, and the dashboard consumes the nonce on use so a captured request cannot be replayed. The bundle is a delegate credential and is never written to disk: it is held in memory for the session and fetched again on the next launch. A wallet with no delegation is offered a one-time mint (the prepare/complete flow the Files page uses, hashes signed with the project key after an explicit approval). A runner refusal drops the held bundle so the next turn fetches a fresh one.
 - **`/sync` defaults to the `workspace` volume.** The harness works in the volume named `workspace`, so `/sync push` and `/sync pull` now default to that volume instead of one named after the project directory. Pass a name to keep a per-project volume.
