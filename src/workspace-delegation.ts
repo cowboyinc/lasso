@@ -24,11 +24,8 @@
 
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { WorkspaceDelegationBundle } from "./cattle-guard-client.js";
-import {
-  encodeFilesSignature,
-  filesTokenBucket,
-  filesTokenHashHex,
-} from "./files-client.js";
+import { randomUUID } from "node:crypto";
+import { encodeFilesSignature, authorizeFilesRequest } from "./files-authorization.js";
 import { signHashLocally, type EcdsaSignature } from "./signer.js";
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -157,7 +154,6 @@ export class WorkspaceDelegationClient {
   private readonly signHash: SignHashFn;
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
-  private cached: { bucket: number; sig: string } | null = null;
 
   constructor(options: WorkspaceDelegationClientOptions) {
     this.baseUrl = validateDashboardOrigin(options.dashboardUrl);
@@ -167,42 +163,46 @@ export class WorkspaceDelegationClient {
     this.now = options.now ?? Date.now;
   }
 
-  /** Files-scope proof: the same token every `/sync` call carries. */
-  private async proof(force: boolean, signal?: AbortSignal): Promise<Record<string, string>> {
-    const bucket = filesTokenBucket(this.now());
-    if (!force && this.cached?.bucket === bucket) {
-      return { "x-cowboy-files-sig": this.cached.sig, "x-cowboy-files-ts": String(bucket) };
-    }
-    const signature = await this.signHash(filesTokenHashHex(this.walletAddress, bucket), signal);
-    const sig = encodeFilesSignature(signature);
-    this.cached = { bucket, sig };
-    return { "x-cowboy-files-sig": sig, "x-cowboy-files-ts": String(bucket) };
-  }
-
   private async request(
     method: "GET" | "POST",
     path: string,
     body: unknown,
     options: { proof: boolean; signal?: AbortSignal }
   ): Promise<{ status: number; json: unknown }> {
+    const payload = body === undefined ? undefined : JSON.parse(JSON.stringify(body));
+    const target = new URL(`/api/wallet/${this.walletAddress}/cbfs-delegation${path}`, this.baseUrl);
+    const operation = randomUUID();
     let retried = false;
+    let uncertain = false;
     for (;;) {
-      const headers = options.proof ? await this.proof(retried, options.signal) : {};
-      const response = await this.fetchFn(
-        new URL(`/api/wallet/${this.walletAddress}/cbfs-delegation${path}`, this.baseUrl),
+      let headers: Record<string, string>;
+      try {
+        headers = options.proof ? await authorizeFilesRequest({ address: this.walletAddress, audience: this.baseUrl.origin, method, path: target.pathname + target.search, body: payload, operation }, { signHash: this.signHash, fetchFn: this.fetchFn, now: this.now }, options.signal) : {};
+      } catch (error) {
+        if (uncertain) throw Object.assign(new Error("The authorization operation could not be confirmed; check its result before retrying"), { operation, uncertain: true });
+        throw error;
+      }
+      let response: Response;
+      try {
+        response = await this.fetchFn(
+        target,
         {
           method,
           headers: {
             accept: "application/json",
             "cowboy-client": "lasso",
             ...headers,
-            ...(body === undefined ? {} : { "content-type": "application/json" }),
+            ...(payload === undefined ? {} : { "content-type": "application/json" }),
           },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-          redirect: "error",
+          ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+          redirect: "error", credentials: "omit",
           signal: options.signal,
         }
       );
+      } catch (error) {
+        if (options.proof && !retried && error instanceof TypeError && !options.signal?.aborted) { retried = true; uncertain = method !== "GET"; continue; }
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), { operation, uncertain: method !== "GET" });
+      }
       if (options.proof && response.status === 401 && !retried) {
         await response.body?.cancel();
         retried = true;
@@ -216,6 +216,13 @@ export class WorkspaceDelegationClient {
         } catch {
           throw new WorkspaceDelegationError("Dashboard returned malformed JSON", response.status);
         }
+      }
+      const code = asRecord(json)?.code;
+      if (options.proof && typeof code === "string" && code.startsWith("FILES_OPERATION_")) {
+        throw Object.assign(new WorkspaceDelegationError("The Files operation could not be confirmed; check its result before retrying", response.status), { operation, code, uncertain: code !== "FILES_OPERATION_CONFLICT" });
+      }
+      if (uncertain && [401, 403, 503].includes(response.status)) {
+        throw Object.assign(new WorkspaceDelegationError("The Files operation could not be confirmed; check its result before retrying", response.status), { operation, uncertain: true });
       }
       // Fastify's own 404 for an unregistered route ("Route POST:... not
       // found") means this dashboard predates the hand-off. That is not
@@ -319,7 +326,7 @@ export class WorkspaceDelegationClient {
       "POST",
       "/complete",
       { cert, ras, certSig, rasSig },
-      { proof: false, signal }
+      { proof: true, signal }
     );
     if (completed.status !== 200) {
       throw new WorkspaceDelegationError(

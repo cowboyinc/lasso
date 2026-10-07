@@ -50,6 +50,7 @@ function fakeDashboard(options: {
   const fetchFn: typeof fetch = async (input, init) => {
     const url = String(input);
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
+    if (url.endsWith("/files/authorization")) return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
     calls.push({ url, init, body });
     if (url.endsWith("/cbfs-delegation/bundle/challenge")) {
       const nonce = `${NONCE}${counter++}`;
@@ -111,7 +112,6 @@ test("bundle fetch: files-proof challenge, signed statement, nonce spent once", 
     dashboardUrl: DASHBOARD,
     walletAddress: WALLET,
     fetchFn: dashboard.fetchFn,
-    now: () => 42 * 3_600_000,
     signHash: async (hashHex) => {
       signed.push(hashHex);
       return signHash(hashHex);
@@ -125,8 +125,9 @@ test("bundle fetch: files-proof challenge, signed statement, nonce spent once", 
     `${DASHBOARD}/api/wallet/${WALLET}/cbfs-delegation/bundle/challenge`
   );
   const challengeHeaders = challenge.init?.headers as Record<string, string>;
-  assert.match(challengeHeaders["x-cowboy-files-sig"], /^0x[0-9a-f]{130}$/);
-  assert.equal(challengeHeaders["x-cowboy-files-ts"], "42");
+  assert.match(challengeHeaders["x-cowboy-files-request-sig"], /^0x[0-9a-f]{130}$/);
+  assert.equal(challengeHeaders["x-cowboy-files-ts"], undefined);
+  assert.match(challengeHeaders["x-cowboy-files-request-operation"], /^[0-9a-f-]{36}$/);
   assert.equal(challengeHeaders["cowboy-client"], "lasso");
   assert.equal(challenge.init?.redirect, "error");
 
@@ -136,7 +137,7 @@ test("bundle fetch: files-proof challenge, signed statement, nonce spent once", 
   assert.equal(fetch.body?.nonce, `${NONCE}0`);
   assert.match(String(fetch.body?.signature), /^0x[0-9a-f]{130}$/);
 
-  // Exactly two signatures: the hourly files proof and the statement digest.
+  // Exactly two signatures: the request-bound Files proof and the statement digest.
   assert.equal(signed.length, 2);
   assert.equal(signed[1], statementHashHex(expectedBundleStatement(WALLET, `${NONCE}0`, HOST)));
   assert.equal(dashboard.open.size, 0);
@@ -193,7 +194,7 @@ test("bundle fetch reads 404 as no delegation and a missing route as an error", 
     fetchFn: legacy,
     signHash,
   });
-  await assert.rejects(old.bundle(), /does not expose the delegation bundle hand-off/);
+  await assert.rejects(old.bundle(), /Files authorization is unavailable/);
 });
 
 test("mint signs the two prepared hashes with the project key and completes", async () => {
@@ -209,8 +210,8 @@ test("mint signs the two prepared hashes with the project key and completes", as
     },
   });
   await client.mint();
-  // The files-scope proof, the cert hash, and the RAS hash: nothing else is signed.
-  assert.equal(signed.length, 3);
+  // Prepare and complete each authorize their generated request.
+  assert.equal(signed.length, 4);
   assert.equal(signed[1], CERT_HASH);
   assert.equal(signed[2], RAS_HASH);
   const complete = dashboard.calls.find((call) => call.url.endsWith("/complete"));
@@ -225,6 +226,7 @@ test("mint signs the two prepared hashes with the project key and completes", as
 
 test("mint refuses a prepare response whose hashes are not 32-byte digests", async () => {
   const fetchFn: typeof fetch = async (input) => {
+    if (String(input).endsWith("/files/authorization")) return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
     if (String(input).endsWith("/prepare")) {
       return Response.json({ certHash: "0x1234", rasHash: RAS_HASH, cert: "{}", ras: "{}" });
     }
@@ -307,3 +309,23 @@ test("ensureWorkspaceDelegation: held bundle, then dashboard, then approved mint
     /different wallet/
   );
 });
+
+for (const code of ["FILES_OPERATION_PENDING", "FILES_OPERATION_UNCERTAIN", "FILES_OPERATION_CONFLICT"]) {
+  test(`delegation ${code} is not an already-active result`, async () => {
+    const requests: string[] = [];
+    const client = new WorkspaceDelegationClient({ dashboardUrl: DASHBOARD, walletAddress: WALLET, signHash,
+      fetchFn: async (input) => {
+        const url = String(input); requests.push(url);
+        if (url.endsWith("/files/authorization")) return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
+        return Response.json({ code }, { status: code === "FILES_OPERATION_UNCERTAIN" ? 503 : 409 });
+      },
+    });
+    await assert.rejects(client.mint(), error => {
+      assert.equal((error as { code: string }).code, code);
+      assert.equal((error as { uncertain: boolean }).uncertain, code !== "FILES_OPERATION_CONFLICT");
+      return true;
+    });
+    assert.equal(requests.length, 2);
+    assert.ok(requests[1].endsWith("/prepare"));
+  });
+}

@@ -1,10 +1,9 @@
+import { filesRequestStatement, filesStatementHash } from "./files-authorization.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_RAW_BYTES,
-  filesTokenBucket,
-  filesTokenHashHex,
   encodeFilesSignature,
   validateVolumeName,
   validateRemotePath,
@@ -16,6 +15,7 @@ import type { EcdsaSignature } from "./signer.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+const NOW = 1_800_000_000_000;
 const SIG: EcdsaSignature = { r: `0x${"11".repeat(32)}`, s: `0x${"22".repeat(32)}`, v: 1 };
 
 interface Call {
@@ -26,10 +26,13 @@ interface Call {
 }
 
 function fakeFetch(
-  responder: (call: Call, index: number) => { status: number; json?: unknown; text?: string }
+  responder: (call: Call, index: number) => { status: number; json?: unknown; text?: string },
+  now = () => NOW,
 ): { calls: Call[]; fetchFn: typeof fetch } {
   const calls: Call[] = [];
+  let nonces = 0;
   const fetchFn = (async (input: unknown, init?: RequestInit) => {
+    if (/\/(files\/authorization|volumes\/challenge)$/.test(String(input))) return Response.json({ nonce: `${now() + 300_000}.${String.fromCharCode(65 + nonces++).repeat(43)}` });
     const call: Call = {
       url: String(input),
       method: init?.method ?? "GET",
@@ -52,13 +55,13 @@ function makeClient(
   responder: Parameters<typeof fakeFetch>[0],
   overrides: { now?: () => number; signHash?: () => Promise<EcdsaSignature> } = {}
 ) {
-  const { calls, fetchFn } = fakeFetch(responder);
+  const { calls, fetchFn } = fakeFetch(responder, overrides.now);
   const signCalls: string[] = [];
   const client = makeFilesClient({
     dashboardUrl: "https://dash.example/",
     walletAddress: "0xAbCd000000000000000000000000000000000001",
     fetchFn,
-    now: overrides.now ?? (() => 3_600_000 * 1000),
+    now: overrides.now ?? (() => NOW),
     signHash:
       overrides.signHash ??
       (async (hashHex: string) => {
@@ -69,20 +72,12 @@ function makeClient(
   return { client, calls, signCalls };
 }
 
-// ── token construction ───────────────────────────────────────────────────────
-
-test("filesTokenHashHex: lowercases the address and binds the bucket", () => {
-  const a = filesTokenHashHex("0xABCD000000000000000000000000000000000001", 42);
-  const b = filesTokenHashHex("0xabcd000000000000000000000000000000000001", 42);
-  const c = filesTokenHashHex("0xabcd000000000000000000000000000000000001", 43);
-  assert.equal(a, b);
-  assert.notEqual(a, c);
-  assert.match(a, /^0x[0-9a-f]{64}$/);
-});
-
-test("filesTokenBucket: floors to the hour", () => {
-  assert.equal(filesTokenBucket(3_600_000 * 5 + 3_599_999), 5);
-  assert.equal(filesTokenBucket(3_600_000 * 6), 6);
+test("Files request statement includes the selected wallet and request", () => {
+  const request = { address: "0xABCD000000000000000000000000000000000001", audience: "https://dash.example", method: "GET", path: "/api/wallet/0xabcd/files", body: undefined, operation: "e0a8ba2a-e1d5-4e47-a8e1-5bdc5d545111" };
+  const statement = filesRequestStatement(request, "nonce");
+  assert.equal(statement, filesRequestStatement({ ...request, address: request.address.toLowerCase() }, "nonce"));
+  assert.notEqual(statement, filesRequestStatement({ ...request, method: "DELETE" }, "nonce"));
+  assert.match(filesStatementHash(statement), /^0x[0-9a-f]{64}$/);
 });
 
 test("encodeFilesSignature: 0x || r || s || v wire shape", () => {
@@ -119,26 +114,27 @@ test("validateRemotePath: rejects traversal, absolute, flag-like and control-cha
 
 // ── auth header wiring + caching ─────────────────────────────────────────────
 
-test("client: sends sig/ts headers and lowercases the address in the URL", async () => {
+test("client: sends request authorization headers and lowercases the address in the URL", async () => {
   const { client, calls } = makeClient(() => ({ status: 200, json: { volumes: [] } }));
   await client.listVolumes();
   assert.equal(calls.length, 1);
   assert.ok(calls[0].url.startsWith("https://dash.example/api/wallet/0xabcd"));
-  assert.equal(calls[0].headers["x-cowboy-files-sig"], encodeFilesSignature(SIG));
-  assert.equal(calls[0].headers["x-cowboy-files-ts"], String(filesTokenBucket(3_600_000 * 1000)));
+  assert.equal(calls[0].headers["x-cowboy-files-request-sig"], encodeFilesSignature(SIG));
+  assert.match(calls[0].headers["x-cowboy-files-request-operation"], /^[0-9a-f-]{36}$/);
+  assert.equal(calls[0].headers["x-cowboy-files-ts"], undefined);
 });
 
-test("client: caches the token within a bucket, re-signs on bucket change", async () => {
-  let nowMs = 3_600_000 * 10;
+test("client: authorizes every request with a new signature", async () => {
+  let nowMs = NOW;
   const { client, signCalls } = makeClient(() => ({ status: 200, json: { volumes: [] } }), {
     now: () => nowMs,
   });
   await client.listVolumes();
   await client.listVolumes();
-  assert.equal(signCalls.length, 1);
+  assert.equal(signCalls.length, 2);
   nowMs += 3_600_000; // next hour
   await client.listVolumes();
-  assert.equal(signCalls.length, 2);
+  assert.equal(signCalls.length, 3);
 });
 
 test("client: retries exactly once with a fresh signature on 401", async () => {
@@ -210,7 +206,8 @@ test("uploadFiles: enforces the batch count and raw-size caps client-side", asyn
 });
 
 test("readObject: an empty 200 body is an error, never content:'' (no silent blanking)", async () => {
-  const fetchFn = (async () =>
+  const fetchFn = (async (input: unknown) => String(input).endsWith("/files/authorization")
+    ? Response.json({ nonce: `${NOW + 300_000}.${"a".repeat(43)}` }) :
     ({
       ok: true,
       status: 200,
@@ -223,7 +220,7 @@ test("readObject: an empty 200 body is an error, never content:'' (no silent bla
     dashboardUrl: "https://dash.example",
     walletAddress: "0xabcd000000000000000000000000000000000001",
     fetchFn,
-    now: () => 0,
+    now: () => NOW,
     signHash: async () => SIG,
   });
   await assert.rejects(client.readObject("proj", "a.py"), /empty\/malformed body/);
@@ -246,4 +243,43 @@ test("uploadFiles: validates every remote path before sending", async () => {
     /invalid remote path/
   );
   assert.equal(calls.length, 0);
+});
+
+test("client: a transport retry keeps the operation and obtains a fresh authorization", async () => {
+  let effects = 0;
+  let operation: string | undefined;
+  const { client, calls, signCalls } = makeClient(call => {
+    if (!operation) {
+      operation = call.headers["x-cowboy-files-request-operation"];
+      effects++;
+      throw new TypeError("response lost");
+    }
+    assert.equal(call.headers["x-cowboy-files-request-operation"], operation);
+    return { status: 200, json: { ok: true } };
+  });
+  await client.uploadFiles("notes", [{ remote: "a.txt", bytes: Buffer.from("a") }]);
+  assert.equal(effects, 1);
+  assert.equal(signCalls.length, 2);
+  assert.notEqual(signCalls[0], signCalls[1]);
+  assert.notEqual(calls[0].headers["x-cowboy-files-request-nonce"], calls[1].headers["x-cowboy-files-request-nonce"]);
+  assert.equal(calls[0].body, calls[1].body);
+});
+
+test("client: interrupted reauthorization preserves an unconfirmed operation", async () => {
+  let calls = 0;
+  let signatures = 0;
+  const client = makeFilesClient({
+    dashboardUrl: "https://dash.example", walletAddress: "0x" + "11".repeat(20), now: () => NOW,
+    signHash: async () => { if (++signatures === 2) throw new Error("wallet locked"); return SIG; },
+    fetchFn: (async input => {
+      if (String(input).endsWith("/files/authorization")) return Response.json({ nonce: `${NOW + 300_000}.${"a".repeat(43)}` });
+      calls++;
+      throw new TypeError("response lost");
+    }) as typeof fetch,
+  });
+  await assert.rejects(client.uploadFiles("notes", [{ remote: "a.txt", bytes: Buffer.from("a") }]),
+    (error: unknown) => error instanceof Error && (error as Error & { uncertain?: boolean }).uncertain === true &&
+      typeof (error as Error & { operation?: string }).operation === "string");
+  assert.equal(calls, 1);
+  assert.equal(signatures, 2);
 });
