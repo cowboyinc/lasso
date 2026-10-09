@@ -268,18 +268,44 @@ test("client: a transport retry keeps the operation and obtains a fresh authoriz
 test("client: interrupted reauthorization preserves an unconfirmed operation", async () => {
   let calls = 0;
   let signatures = 0;
+  let operation = "";
   const client = makeFilesClient({
     dashboardUrl: "https://dash.example", walletAddress: "0x" + "11".repeat(20), now: () => NOW,
     signHash: async () => { if (++signatures === 2) throw new Error("wallet locked"); return SIG; },
-    fetchFn: (async input => {
+    fetchFn: (async (input, init) => {
       if (String(input).endsWith("/files/authorization")) return Response.json({ nonce: `${NOW + 300_000}.${"a".repeat(43)}` });
+      operation = new Headers(init?.headers).get("x-cowboy-files-request-operation")!;
       calls++;
       throw new TypeError("response lost");
     }) as typeof fetch,
   });
   await assert.rejects(client.uploadFiles("notes", [{ remote: "a.txt", bytes: Buffer.from("a") }]),
-    (error: unknown) => error instanceof Error && (error as Error & { uncertain?: boolean }).uncertain === true &&
-      typeof (error as Error & { operation?: string }).operation === "string");
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /could not be confirmed/);
+      assert.ok(operation && error.message.includes(operation));
+      return true;
+    });
   assert.equal(calls, 1);
   assert.equal(signatures, 2);
+});
+
+test("client: a final lost upload reports its operation in the displayed message", async () => {
+  const { client, calls } = makeClient(() => { throw new TypeError("fetch failed"); });
+  await assert.rejects(client.uploadFiles("notes", [{ remote: "a.txt", bytes: Buffer.from("a") }]), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /could not be confirmed/);
+    assert.ok(error.message.includes(calls[0].headers["x-cowboy-files-request-operation"]));
+    assert.equal("uncertain" in error, false);
+    assert.equal("operation" in error, false);
+    return true;
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].headers["x-cowboy-files-request-operation"], calls[1].headers["x-cowboy-files-request-operation"]);
+});
+
+test("client: a final lost read keeps the transport error", async () => {
+  const { client, calls } = makeClient(() => { throw new TypeError("fetch failed"); });
+  await assert.rejects(client.listVolumes(), { name: "TypeError", message: "fetch failed" });
+  assert.equal(calls.length, 2);
 });

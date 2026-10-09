@@ -22,10 +22,9 @@
  * a runner refusal drops it so the next turn fetches a fresh one.
  */
 
-import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { WorkspaceDelegationBundle } from "./cattle-guard-client.js";
 import { randomUUID } from "node:crypto";
-import { encodeFilesSignature, authorizeFilesRequest } from "./files-authorization.js";
+import { encodeFilesSignature, authorizeFilesRequest, dashboardOrigin, filesStatementHash } from "./files-authorization.js";
 import { signHashLocally, type EcdsaSignature } from "./signer.js";
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -51,25 +50,6 @@ export interface WorkspaceDelegationClientOptions {
   signHash?: SignHashFn;
   fetchFn?: typeof fetch;
   now?: () => number;
-}
-
-function validateDashboardOrigin(value: string): URL {
-  const url = new URL(value);
-  const loopback =
-    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (
-    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname.replace(/\/+$/, "") !== ""
-  ) {
-    throw new WorkspaceDelegationError(
-      "Dashboard URL must be an HTTPS origin or HTTP loopback origin"
-    );
-  }
-  return new URL(url.origin);
 }
 
 async function boundedText(response: Response): Promise<string> {
@@ -102,12 +82,6 @@ export function expectedBundleStatement(
   dashboardHost: string
 ): string {
   return `${BUNDLE_STATEMENT_PREFIX}:${walletAddress.toLowerCase()}:${nonce}:${dashboardHost.toLowerCase()}`;
-}
-
-/** keccak256 of the statement's UTF-8 bytes; the dashboard recovers the
- *  signer from this raw digest (or its personal-message framing). */
-export function statementHashHex(statement: string): string {
-  return `0x${Buffer.from(keccak_256(new TextEncoder().encode(statement))).toString("hex")}`;
 }
 
 /**
@@ -156,7 +130,7 @@ export class WorkspaceDelegationClient {
   private readonly now: () => number;
 
   constructor(options: WorkspaceDelegationClientOptions) {
-    this.baseUrl = validateDashboardOrigin(options.dashboardUrl);
+    this.baseUrl = new URL(dashboardOrigin(options.dashboardUrl));
     this.walletAddress = options.walletAddress.toLowerCase();
     this.signHash = options.signHash ?? signHashLocally;
     this.fetchFn = options.fetchFn ?? fetch;
@@ -172,6 +146,7 @@ export class WorkspaceDelegationClient {
     const payload = body === undefined ? undefined : JSON.parse(JSON.stringify(body));
     const target = new URL(`/api/wallet/${this.walletAddress}/cbfs-delegation${path}`, this.baseUrl);
     const operation = randomUUID();
+    const unconfirmed = `The Files operation ${operation} could not be confirmed; check its result before retrying`;
     let retried = false;
     let uncertain = false;
     for (;;) {
@@ -179,7 +154,7 @@ export class WorkspaceDelegationClient {
       try {
         headers = options.proof ? await authorizeFilesRequest({ address: this.walletAddress, audience: this.baseUrl.origin, method, path: target.pathname + target.search, body: payload, operation }, { signHash: this.signHash, fetchFn: this.fetchFn, now: this.now }, options.signal) : {};
       } catch (error) {
-        if (uncertain) throw Object.assign(new Error("The authorization operation could not be confirmed; check its result before retrying"), { operation, uncertain: true });
+        if (uncertain) throw new Error(unconfirmed, { cause: error });
         throw error;
       }
       let response: Response;
@@ -201,7 +176,8 @@ export class WorkspaceDelegationClient {
       );
       } catch (error) {
         if (options.proof && !retried && error instanceof TypeError && !options.signal?.aborted) { retried = true; uncertain = method !== "GET"; continue; }
-        throw Object.assign(error instanceof Error ? error : new Error(String(error)), { operation, uncertain: method !== "GET" });
+        if (method !== "GET") throw new Error(unconfirmed, { cause: error });
+        throw error;
       }
       if (options.proof && response.status === 401 && !retried) {
         await response.body?.cancel();
@@ -219,22 +195,10 @@ export class WorkspaceDelegationClient {
       }
       const code = asRecord(json)?.code;
       if (options.proof && typeof code === "string" && code.startsWith("FILES_OPERATION_")) {
-        throw Object.assign(new WorkspaceDelegationError("The Files operation could not be confirmed; check its result before retrying", response.status), { operation, code, uncertain: code !== "FILES_OPERATION_CONFLICT" });
+        throw new WorkspaceDelegationError(`${unconfirmed} (${code})`, response.status);
       }
       if (uncertain && [401, 403, 503].includes(response.status)) {
-        throw Object.assign(new WorkspaceDelegationError("The Files operation could not be confirmed; check its result before retrying", response.status), { operation, uncertain: true });
-      }
-      // Fastify's own 404 for an unregistered route ("Route POST:... not
-      // found") means this dashboard predates the hand-off. That is not
-      // "no delegation": minting would succeed and the fetch would still fail.
-      if (response.status === 404) {
-        const message = asRecord(json)?.message;
-        if (typeof message === "string" && /^Route\b/.test(message)) {
-          throw new WorkspaceDelegationError(
-            "This dashboard does not expose the delegation bundle hand-off yet (needs the cbfs-delegation/bundle routes)",
-            404
-          );
-        }
+        throw new WorkspaceDelegationError(unconfirmed, response.status);
       }
       return { status: response.status, json };
     }
@@ -269,7 +233,7 @@ export class WorkspaceDelegationClient {
         "Dashboard asked for a signature over a statement lasso does not recognize; refusing to sign"
       );
     }
-    const signature = encodeFilesSignature(await this.signHash(statementHashHex(message), signal));
+    const signature = encodeFilesSignature(await this.signHash(filesStatementHash(message), signal));
     const { status, json } = await this.request(
       "POST",
       "/bundle",

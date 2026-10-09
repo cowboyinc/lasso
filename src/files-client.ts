@@ -143,6 +143,7 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
   ): Promise<unknown> => {
     const payload = body === undefined ? undefined : JSON.parse(JSON.stringify(body));
     const operation = randomUUID();
+    const unconfirmed = `sync: the Files operation ${operation} could not be confirmed; check its result before retrying`;
     const dependencies = { signHash, fetchFn, now };
     let retried = false;
     let uncertain = false;
@@ -153,7 +154,7 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
         ? await authorizeVolumeCreate(address, base, payload.name, payload.visibility, dependencies, signal)
         : await authorizeFilesRequest({ address, audience: base, method, path: `/api/wallet/${address}${path}`, body: payload, operation }, dependencies, signal);
       } catch (error) {
-        if (uncertain) throw Object.assign(new Error("sync: the operation could not be confirmed; check its result before retrying"), { operation, uncertain: true });
+        if (uncertain) throw new Error(unconfirmed, { cause: error });
         throw error;
       }
       let resp: Response;
@@ -164,7 +165,8 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
         });
       } catch (error) {
         if (!retried && path !== "/volumes" && error instanceof TypeError && !signal?.aborted) { retried = true; uncertain = method !== "GET"; continue; }
-        throw Object.assign(error instanceof Error ? error : new Error(String(error)), { operation, uncertain: method !== "GET" });
+        if (method !== "GET") throw new Error(unconfirmed, { cause: error });
+        throw error;
       }
       if (resp.ok) {
         if (options.voidBody) {
@@ -190,8 +192,8 @@ export function makeFilesClient(opts: FilesClientOptions): FilesClient {
       let code: unknown;
       try { code = JSON.parse(detail).code; } catch { /* Non-JSON error. */ }
       const operationUncertain = code === "FILES_OPERATION_PENDING" || code === "FILES_OPERATION_UNCERTAIN" || (uncertain && [401, 403, 503].includes(resp.status));
-      if (operationUncertain) throw Object.assign(new FilesApiError("sync: the Files operation could not be confirmed; check its result before retrying", resp.status), { operation, uncertain: true });
-      throw Object.assign(friendly(resp.status, detail), { operation });
+      if (operationUncertain) throw new FilesApiError(unconfirmed, resp.status);
+      throw friendly(resp.status, detail);
     }
   };
 

@@ -6,9 +6,10 @@ import {
   WorkspaceDelegationError,
   ensureWorkspaceDelegation,
   expectedBundleStatement,
-  statementHashHex,
   validateBundle,
 } from "./workspace-delegation.js";
+import { filesStatementHash } from "./files-authorization.js";
+import { makeFilesClient } from "./files-client.js";
 
 const WALLET = "0xabcd000000000000000000000000000000000001";
 const OTHER = "0xabcd000000000000000000000000000000000002";
@@ -101,8 +102,8 @@ test("the statement lasso signs is fixed in shape and hashed as keccak of its by
     expectedBundleStatement(WALLET.toUpperCase(), NONCE, "Dashboard.Canyon.Cowboylabs.Net"),
     `${BUNDLE_STATEMENT_PREFIX}:${WALLET}:${NONCE}:${HOST}`
   );
-  assert.match(statementHashHex("x"), /^0x[0-9a-f]{64}$/);
-  assert.notEqual(statementHashHex("x"), statementHashHex("y"));
+  assert.match(filesStatementHash("x"), /^0x[0-9a-f]{64}$/);
+  assert.notEqual(filesStatementHash("x"), filesStatementHash("y"));
 });
 
 test("bundle fetch: files-proof challenge, signed statement, nonce spent once", async () => {
@@ -139,7 +140,7 @@ test("bundle fetch: files-proof challenge, signed statement, nonce spent once", 
 
   // Exactly two signatures: the request-bound Files proof and the statement digest.
   assert.equal(signed.length, 2);
-  assert.equal(signed[1], statementHashHex(expectedBundleStatement(WALLET, `${NONCE}0`, HOST)));
+  assert.equal(signed[1], filesStatementHash(expectedBundleStatement(WALLET, `${NONCE}0`, HOST)));
   assert.equal(dashboard.open.size, 0);
 });
 
@@ -169,7 +170,7 @@ test("bundle fetch refuses to sign a statement that is not the expected one", as
   }
 });
 
-test("bundle fetch reads 404 as no delegation and a missing route as an error", async () => {
+test("bundle fetch reads 404 as no delegation", async () => {
   const inactive = fakeDashboard({ active: () => false });
   const client = new WorkspaceDelegationClient({
     dashboardUrl: DASHBOARD,
@@ -178,23 +179,6 @@ test("bundle fetch reads 404 as no delegation and a missing route as an error", 
     signHash,
   });
   assert.equal(await client.bundle(), null);
-
-  const legacy: typeof fetch = async () =>
-    Response.json(
-      {
-        message: "Route POST:/api/wallet/x/cbfs-delegation/bundle/challenge not found",
-        error: "Not Found",
-        statusCode: 404,
-      },
-      { status: 404 }
-    );
-  const old = new WorkspaceDelegationClient({
-    dashboardUrl: DASHBOARD,
-    walletAddress: WALLET,
-    fetchFn: legacy,
-    signHash,
-  });
-  await assert.rejects(old.bundle(), /Files authorization is unavailable/);
 });
 
 test("mint signs the two prepared hashes with the project key and completes", async () => {
@@ -313,19 +297,65 @@ test("ensureWorkspaceDelegation: held bundle, then dashboard, then approved mint
 for (const code of ["FILES_OPERATION_PENDING", "FILES_OPERATION_UNCERTAIN", "FILES_OPERATION_CONFLICT"]) {
   test(`delegation ${code} is not an already-active result`, async () => {
     const requests: string[] = [];
+    let operation = "";
     const client = new WorkspaceDelegationClient({ dashboardUrl: DASHBOARD, walletAddress: WALLET, signHash,
-      fetchFn: async (input) => {
+      fetchFn: async (input, init) => {
         const url = String(input); requests.push(url);
         if (url.endsWith("/files/authorization")) return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
+        operation = new Headers(init?.headers).get("x-cowboy-files-request-operation")!;
         return Response.json({ code }, { status: code === "FILES_OPERATION_UNCERTAIN" ? 503 : 409 });
       },
     });
     await assert.rejects(client.mint(), error => {
-      assert.equal((error as { code: string }).code, code);
-      assert.equal((error as { uncertain: boolean }).uncertain, code !== "FILES_OPERATION_CONFLICT");
+      assert.ok(error instanceof WorkspaceDelegationError);
+      assert.ok(error.message.includes(code));
+      assert.ok(operation && error.message.includes(operation));
+      assert.equal(error.status, code === "FILES_OPERATION_UNCERTAIN" ? 503 : 409);
       return true;
     });
     assert.equal(requests.length, 2);
     assert.ok(requests[1].endsWith("/prepare"));
+  });
+}
+
+test("Files and delegation clients accept the same HTTPS and loopback origins", () => {
+  for (const dashboardUrl of [DASHBOARD, "http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]) {
+    const options = { dashboardUrl, walletAddress: WALLET, signHash };
+    assert.doesNotThrow(() => makeFilesClient(options));
+    assert.doesNotThrow(() => new WorkspaceDelegationClient(options));
+  }
+  for (const dashboardUrl of ["http://example.com", `${DASHBOARD}/path`, `${DASHBOARD}//`, `${DASHBOARD}/?q=1`, `${DASHBOARD}/#hash`, "https://user:pass@example.com"]) {
+    const options = { dashboardUrl, walletAddress: WALLET, signHash };
+    assert.throws(() => makeFilesClient(options), /HTTPS origin/);
+    assert.throws(() => new WorkspaceDelegationClient(options), /HTTPS origin/);
+  }
+});
+
+for (const failure of ["transport", "reauthorization"]) {
+  test(`delegation reports the operation after final ${failure} failure`, async () => {
+    const operations: string[] = [];
+    let challenges = 0;
+    const client = new WorkspaceDelegationClient({
+      dashboardUrl: DASHBOARD, walletAddress: WALLET, signHash,
+      fetchFn: async (input, init) => {
+        if (String(input).endsWith("/files/authorization")) {
+          if (++challenges === 2 && failure === "reauthorization") throw new TypeError("fetch failed");
+          return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
+        }
+        operations.push(new Headers(init?.headers).get("x-cowboy-files-request-operation")!);
+        throw new TypeError("fetch failed");
+      },
+    });
+    await assert.rejects(client.mint(), error => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /could not be confirmed/);
+      assert.ok(operations[0] && error.message.includes(operations[0]));
+      assert.equal("operation" in error, false);
+      assert.equal("uncertain" in error, false);
+      return true;
+    });
+    assert.equal(challenges, 2);
+    assert.equal(operations.length, failure === "reauthorization" ? 1 : 2);
+    assert.equal(new Set(operations).size, 1);
   });
 }

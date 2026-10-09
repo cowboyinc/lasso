@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import timers from "node:timers/promises";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import type { EcdsaSignature } from "./signer.js";
 
@@ -73,9 +74,25 @@ type Dependencies = {
 export async function authorizeFilesRequest(request: FilesRequest, dependencies: Dependencies, signal?: AbortSignal): Promise<Record<string, string>> {
   const body = request.body === undefined ? undefined : JSON.parse(JSON.stringify(request.body));
   const snapshot = { ...request, body };
-  const response = await dependencies.fetchFn(`${request.audience}/api/wallet/${request.address.toLowerCase()}/files/authorization`, {
-    method: "POST", redirect: "error", credentials: "omit", signal,
-  });
+  let response: Response;
+  let waited = 0;
+  for (let retries = 0; ; retries++) {
+    signal?.throwIfAborted();
+    response = await dependencies.fetchFn(`${request.audience}/api/wallet/${request.address.toLowerCase()}/files/authorization`, {
+      method: "POST", redirect: "error", credentials: "omit", signal,
+    });
+    if (response.status !== 429) break;
+    await response.body?.cancel();
+    const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
+    const requestedWait = /^\d+$/.test(retryAfter)
+      ? Number(retryAfter) * 1_000
+      : Date.parse(retryAfter) - dependencies.now();
+    const wait = Number.isNaN(requestedWait) ? 1_000 : Math.max(1_000, requestedWait);
+    // Bound both server-directed delays and repeated immediate throttling.
+    if (retries >= 3 || waited + wait > 60_000) break;
+    await timers.setTimeout(wait, undefined, { signal });
+    waited += wait;
+  }
   if (!response.ok) throw new Error(`Files authorization is unavailable (HTTP ${response.status})`);
   const { nonce } = await response.json() as { nonce?: unknown };
   validateFilesNonce(nonce, dependencies.now());
