@@ -158,3 +158,17 @@ To use a direct vLLM runner instead, omit `cattle_guard_url` and point
 ## License
 
 Business Source License 1.1 — see [LICENSE](LICENSE).
+
+## Files authorization compatibility
+
+Files sync and workspace delegation use the Dashboard request authorization
+protocol. Lasso constructs the statement from its configured Dashboard origin,
+wallet, method, target and request body, with a fresh challenge and an operation
+ID. A bounded transport retry obtains fresh authorization for the same operation.
+If an operation cannot be confirmed, check the remote result before starting it
+again.
+
+Roll out this lasso version together with the matching Dashboard frontend/backend
+and macOS versions. Deploy the Dashboard operation-store migration before the
+coordinated cutover. Existing lasso and macOS installations must upgrade at that
+cutover; mixed client/server protocol versions are unsupported.

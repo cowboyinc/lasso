@@ -1,0 +1,19 @@
+{
+  "address": "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+  "audience": "https://dashboard.example.com",
+  "method": "POST",
+  "path": "/api/wallet/0x7e5f4552091a69125d5dfcb7b8c2659029395bdf/drive/authorization?z=last&x=space%20value&x=a%2Bb&%EE%80%80=c&%F0%9F%98%80=d",
+  "body": {
+    "z": [
+      "é",
+      "é",
+      true,
+      0
+    ],
+    "a": "{\"valid_until_epoch\":18446744073709551615}"
+  },
+  "operation": "123e4567-e89b-42d3-a456-426614174000",
+  "nonce": "1800000300000.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "statement": "cowboy-files-request-v1:1800000300000.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:{\"address\":\"0x7e5f4552091a69125d5dfcb7b8c2659029395bdf\",\"audience\":\"https://dashboard.example.com\",\"method\":\"POST\",\"path\":\"/api/wallet/0x7e5f4552091a69125d5dfcb7b8c2659029395bdf/drive/authorization?x=space+value&x=a%2Bb&z=last&%F0%9F%98%80=d&%EE%80%80=c\",\"bodyHash\":\"58154433412c90dde48c421f2a614b9cc135e9bb2819773ebfd0582d4dc30585\",\"operation\":\"123e4567-e89b-42d3-a456-426614174000\"}",
+  "keccak256": "d7ed0af8df42c02ddf77d3f531e727d5459de131bd2e07d28839c73341d6b271"
+}

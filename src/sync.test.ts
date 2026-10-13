@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import timers from "node:timers/promises";
 import {
   MAX_PUSH_FILE_BYTES,
   defaultVolumeName,
@@ -18,7 +19,7 @@ import {
   saveSyncState,
   type LocalFile,
 } from "./sync.js";
-import { MAX_UPLOAD_FILES, MAX_UPLOAD_RAW_BYTES } from "./files-client.js";
+import { makeFilesClient, MAX_UPLOAD_FILES, MAX_UPLOAD_RAW_BYTES } from "./files-client.js";
 import type { FilesClient, RemoteObject, UploadFile, VolumeInfo } from "./files-client.js";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -29,6 +30,52 @@ function makeProject(): string {
   writeFileSync(join(root, ".cowboy", "config.json"), "{}");
   return root;
 }
+
+test("buildPullPlan: reads 500 objects through the Files authorization rate limit", async t => {
+  const start = 1_800_000_000_000;
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: start });
+  const root = makeProject();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let tokens = 60;
+  let last = start;
+  let throttled = 0;
+  let reads = 0;
+  const client = makeFilesClient({
+    dashboardUrl: "https://dash.example", walletAddress: "0x" + "11".repeat(20),
+    now: () => Date.now(),
+    signHash: async () => ({ r: "11".repeat(32), s: "22".repeat(32), v: 1 }),
+    fetchFn: async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/files/authorization")) {
+        tokens = Math.min(60, tokens + (Date.now() - last) / 1_000);
+        last = Date.now();
+        if (tokens < 1) {
+          throttled++;
+          return Response.json({}, { status: 429, headers: { "Retry-After": "1" } });
+        }
+        tokens--;
+        return Response.json({ nonce: `${Date.now() + 300_000}.${"a".repeat(43)}` });
+      }
+      if (url.pathname.endsWith("/files")) return Response.json({ volumes: [{ volumeName: "notes", volumeId: "v" }] });
+      if (url.pathname.endsWith("/objects")) return Response.json({ objects: Array.from({ length: 500 }, (_, i) => ({ path: `file-${i}.txt`, sizeBytes: 1 })) });
+      reads++;
+      return Response.json({ content: "x", truncated: false });
+    },
+  });
+  let done = false;
+  const pending = buildPullPlan(client, root, "notes");
+  pending.then(() => { done = true; }, () => { done = true; });
+  for (let i = 0; !done && i < 500; i++) {
+    await timers.setImmediate();
+    t.mock.timers.tick(1_000);
+  }
+  const plan = await pending;
+  assert.ok(throttled > 0);
+  assert.equal(reads, 500);
+  assert.equal(plan.writes.length, 500);
+  assert.deepEqual(plan.refused, []);
+  assert.deepEqual(plan.skippedTooBig, []);
+});
 
 interface FakeClientState {
   volumes: VolumeInfo[];
